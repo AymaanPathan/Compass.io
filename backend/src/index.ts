@@ -6,6 +6,7 @@ import cookieParser from "cookie-parser";
 import authRoutes from "./routes/auth";
 import githubRoutes from "./routes/github";
 import ossRoutes from "./routes/oss";
+import issuesRoutes from "./routes/issues";
 
 
 const app = express();
@@ -34,6 +35,7 @@ app.use(cookieParser());
 app.use("/api/auth", authRoutes);
 app.use("/api/github", githubRoutes);
 app.use("/api/oss", ossRoutes);
+app.use("/api/issues", issuesRoutes);
 
 app.get("/", (_req: Request, res: Response) => {
   res.json({ message: "Compass backend is running" });
