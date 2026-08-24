@@ -9,10 +9,25 @@ interface RetryOptions {
 }
 
 function isRetryableError(error: any): boolean {
+  const status = error?.response?.status ?? error?.status ?? error?.statusCode;
+
+  if (
+    status === 408 ||
+    status === 429 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504
+  ) {
+    return true;
+  }
+
+  if (typeof status === "number" && status >= 500) {
+    return true;
+  }
+
   const message = String(error?.message || error || "").toLowerCase();
 
   return (
-    message.includes("429") ||
     message.includes("rate limit") ||
     message.includes("too many requests") ||
     message.includes("timeout") ||

@@ -1,7 +1,13 @@
 import { TrueForge } from "@truefoundry/trueforge-sdk";
 
+const trueforgeBaseUrl = process.env.TRUEFORGE_BASE_URL;
+
+if (!trueforgeBaseUrl) {
+  throw new Error("TRUEFORGE_BASE_URL is not configured");
+}
+
 export const agentClient = new TrueForge({
-  baseUrl: process.env.TRUEFORGE_BASE_URL ?? "http://localhost:8791",
+  baseUrl: trueforgeBaseUrl,
   timeoutInSeconds: 600,
 });
 

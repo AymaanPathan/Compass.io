@@ -1,8 +1,9 @@
 import { Router, Response } from "express";
-import User from "../models/User";
+import User, { IUser } from "../models/User";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { agentClient, DEV_PROFILE_AGENT_NAME } from "../services/agentClient";
 import { withAgentRetry } from "../utils/retryAgentTurn";
+import { githubClient } from "../utils/githubClient";
 
 const DEBUG_AGENT_EVENTS = process.env.DEBUG_AGENT_EVENTS === "true";
 
@@ -95,8 +96,6 @@ function extractOutputText(content: any): string {
   return "";
 }
 
-
-
 function parseProfileResponse(text: string): DeveloperProfile | null {
   try {
     const cleaned = text.trim().replace(/^```json\s*|\s*```$/g, "");
@@ -116,17 +115,21 @@ function parseProfileResponse(text: string): DeveloperProfile | null {
   }
 }
 
-// Agent Harness session, not the Gateway's stateless chat pattern.
-// We persist session.id on the user doc and resume via getSession()
-// instead of creating a new session and losing context.
-async function getOrCreateProfileSession(user: any) {
-  if (user.developerProfileSessionId) {
-    try {
-      console.log("♻️ Reusing session:", user.developerProfileSessionId);
+async function getOrCreateProfileSession(user: IUser) {
+  const existingSessionId =
+    user.developerProfileSessionId ??
+    (user as any).developerProfileConversationId;
 
-      const response = await agentClient.sessions.get(
-        user.developerProfileSessionId,
-      );
+  if (existingSessionId) {
+    try {
+      console.log("♻️ Reusing session:", existingSessionId);
+
+      const response = await agentClient.sessions.get(existingSessionId);
+
+      if (!user.developerProfileSessionId) {
+        user.developerProfileSessionId = existingSessionId;
+        await user.save();
+      }
 
       return response.data;
     } catch (err) {
@@ -145,7 +148,6 @@ async function getOrCreateProfileSession(user: any) {
   console.log("🆕 Created session:", session.id);
 
   user.developerProfileSessionId = session.id;
-
   await user.save();
 
   return session;
@@ -155,8 +157,25 @@ async function getOrCreateProfileSession(user: any) {
 //
 // It gathers evidence itself. We just trigger the analysis instruction
 // and let the agent explore the authenticated developer's GitHub profile.
-async function runProfileAgent(user: any): Promise<string> {
+async function runProfileAgent(user: IUser): Promise<string> {
   return withAgentRetry(async () => {
+    const github = githubClient(user.accessToken);
+
+    const { data: githubUser } = await github.get("/user");
+
+    if (githubUser.login !== user.username) {
+      throw new Error(
+        `GitHub identity mismatch: expected ${user.username}, got ${githubUser.login}`,
+      );
+    }
+
+    const { data: repositories } = await github.get("/user/repos", {
+      params: {
+        per_page: 100,
+        sort: "updated",
+      },
+    });
+
     const session = await getOrCreateProfileSession(user);
 
     let finalText = "";
@@ -165,20 +184,32 @@ async function runProfileAgent(user: any): Promise<string> {
       input: [
         {
           type: "user.message",
-          content:
-            "Analyze the authenticated developer's GitHub profile and repositories now, using the GitHub MCP tools available to you. Produce the developer profile exactly as specified in your instructions.",
+          content: `
+Analyze the GitHub developer using the authenticated GitHub data provided below.
+
+GitHub user:
+${JSON.stringify(githubUser, null, 2)}
+
+Repositories:
+${JSON.stringify(repositories, null, 2)}
+
+Authenticated GitHub username:
+${githubUser.login}
+
+Use this data as the source of truth for the developer being analyzed.
+
+Do not analyze or assume another GitHub user.
+
+Produce the developer profile exactly as specified in your instructions.
+`,
         },
       ],
     });
 
     for await (const event of stream) {
       if (DEBUG_AGENT_EVENTS) {
-        console.log(
-          `[profile agent event] ${event?.type}`,
-          JSON.stringify(event),
-        );
+        console.log(`[profile agent event] ${event?.type}`);
       }
-
       // Stream chunks as they arrive
       const chunk = extractText(event);
 

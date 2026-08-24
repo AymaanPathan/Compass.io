@@ -32,12 +32,11 @@ export interface IUser extends Document {
   accessToken: string;
   createdAt: Date;
 
-  // NEW — cached agent output
   developerProfile?: IDeveloperProfile;
   developerProfileRaw?: string;
   developerProfileParseFailed?: boolean;
   developerProfileGeneratedAt?: Date;
-  developerProfileConversationId?: string;
+  developerProfileSessionId?: string;
 }
 
 const TechConfidenceSchema = new Schema(
@@ -74,7 +73,7 @@ const UserSchema = new Schema<IUser>({
   developerProfileRaw: { type: String },
   developerProfileParseFailed: { type: Boolean },
   developerProfileGeneratedAt: { type: Date },
-  developerProfileConversationId: { type: String },
+  developerProfileSessionId: { type: String },
 });
 
 export default mongoose.model<IUser>("User", UserSchema);

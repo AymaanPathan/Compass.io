@@ -10,6 +10,16 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 connectDB();
 
+process.on("uncaughtException", (error) => {
+  console.error("UNCAUGHT EXCEPTION:", error);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("UNHANDLED REJECTION:", reason);
+  process.exit(1);
+});
+
 app.use(
   cors({
     origin: "http://localhost:5173",
