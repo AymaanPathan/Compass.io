@@ -2,6 +2,8 @@ import "dotenv/config";
 import express, { Request, Response } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import authRoutes from "./routes/auth";
+import { connectDB } from "./config/db";
 
 process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT EXCEPTION:", err);
@@ -12,6 +14,7 @@ process.on("unhandledRejection", (err) => {
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+connectDB();
 
 app.use(
   cors({
@@ -21,6 +24,9 @@ app.use(
 );
 app.use(express.json());
 app.use(cookieParser());
+
+
+app.use("/api/auth", authRoutes);
 
 app.get("/", (_req: Request, res: Response) => {
   res.json({ message: "Compass backend is running" });
