@@ -1,20 +1,24 @@
 import "dotenv/config";
 import express, { Request, Response } from "express";
 import cors from "cors";
+import { connectDB } from "./config/db";
 import cookieParser from "cookie-parser";
 import authRoutes from "./routes/auth";
-import { connectDB } from "./config/db";
-
-process.on("uncaughtException", (err) => {
-  console.error("UNCAUGHT EXCEPTION:", err);
-});
-process.on("unhandledRejection", (err) => {
-  console.error("UNHANDLED REJECTION:", err);
-});
+import githubRoutes from "./routes/github";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 connectDB();
+
+process.on("uncaughtException", (error) => {
+  console.error("UNCAUGHT EXCEPTION:", error);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("UNHANDLED REJECTION:", reason);
+  process.exit(1);
+});
 
 app.use(
   cors({
@@ -25,8 +29,8 @@ app.use(
 app.use(express.json());
 app.use(cookieParser());
 
-
 app.use("/api/auth", authRoutes);
+app.use("/api/github", githubRoutes);
 
 app.get("/", (_req: Request, res: Response) => {
   res.json({ message: "Compass backend is running" });
