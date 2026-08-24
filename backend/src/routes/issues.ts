@@ -9,6 +9,7 @@ import {
 import { withAgentRetry } from "../utils/retryAgentTurn";
 
 const DEBUG_AGENT_EVENTS = process.env.DEBUG_AGENT_EVENTS === "true";
+
 const router = Router();
 
 export interface GithubIssue {
@@ -56,9 +57,6 @@ export interface CodeExplorerResult {
   externalContext: string;
 }
 
-// Optional hand-off context from Agent 1 (deep dive) into Agent 2 (code
-// explorer), so the code explorer can aim its searches instead of
-// re-guessing from the raw issue. All fields optional.
 export interface DeepDiveContext {
   whatIsTheIssue?: string;
   whatIsHappeningNow?: string;
@@ -77,23 +75,32 @@ const MAX_TECHNICAL_CONCEPT_LENGTH = 200;
 const MAX_ISSUE_NUMBER = 10_000_000;
 
 // ---------------------------------------------------------------------------
-// In-flight de-dupe + short-lived success caches.
-//
-// These prevent duplicate frontend requests from creating multiple expensive
-// agent sessions and also make repeated visits to the same issue cheaper.
+// Cache configuration
 // ---------------------------------------------------------------------------
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_CACHE_ENTRIES = 100;
+
+// ---------------------------------------------------------------------------
+// Issue discovery cache
+// ---------------------------------------------------------------------------
 
 const inFlightRequests = new Map<string, Promise<IssuesResult>>();
+
 const resultCache = new Map<
   string,
-  { result: IssuesResult; expiresAt: number }
+  {
+    result: IssuesResult;
+    expiresAt: number;
+  }
 >();
 
 function getCached(repoFullName: string): IssuesResult | null {
   const entry = resultCache.get(repoFullName);
-  if (!entry) return null;
+
+  if (!entry) {
+    return null;
+  }
 
   if (Date.now() > entry.expiresAt) {
     resultCache.delete(repoFullName);
@@ -103,19 +110,33 @@ function getCached(repoFullName: string): IssuesResult | null {
   return entry.result;
 }
 
-function setCached(repoFullName: string, result: IssuesResult) {
+function setCached(repoFullName: string, result: IssuesResult): void {
+  if (!resultCache.has(repoFullName) && resultCache.size >= MAX_CACHE_ENTRIES) {
+    const oldestKey = resultCache.keys().next().value;
+
+    if (oldestKey) {
+      resultCache.delete(oldestKey);
+    }
+  }
+
   resultCache.set(repoFullName, {
     result,
     expiresAt: Date.now() + CACHE_TTL_MS,
   });
 }
 
-const DEEPDIVE_CACHE_TTL_MS = 5 * 60 * 1000;
+// ---------------------------------------------------------------------------
+// Deep dive cache
+// ---------------------------------------------------------------------------
 
 const deepDiveInFlight = new Map<string, Promise<IssueDeepDiveResult>>();
+
 const deepDiveCache = new Map<
   string,
-  { result: IssueDeepDiveResult; expiresAt: number }
+  {
+    result: IssueDeepDiveResult;
+    expiresAt: number;
+  }
 >();
 
 function deepDiveKey(repoFullName: string, issueNumber: number): string {
@@ -124,7 +145,10 @@ function deepDiveKey(repoFullName: string, issueNumber: number): string {
 
 function getCachedDeepDive(key: string): IssueDeepDiveResult | null {
   const entry = deepDiveCache.get(key);
-  if (!entry) return null;
+
+  if (!entry) {
+    return null;
+  }
 
   if (Date.now() > entry.expiresAt) {
     deepDiveCache.delete(key);
@@ -134,19 +158,33 @@ function getCachedDeepDive(key: string): IssueDeepDiveResult | null {
   return entry.result;
 }
 
-function setCachedDeepDive(key: string, result: IssueDeepDiveResult) {
+function setCachedDeepDive(key: string, result: IssueDeepDiveResult): void {
+  if (!deepDiveCache.has(key) && deepDiveCache.size >= MAX_CACHE_ENTRIES) {
+    const oldestKey = deepDiveCache.keys().next().value;
+
+    if (oldestKey) {
+      deepDiveCache.delete(oldestKey);
+    }
+  }
+
   deepDiveCache.set(key, {
     result,
-    expiresAt: Date.now() + DEEPDIVE_CACHE_TTL_MS,
+    expiresAt: Date.now() + CACHE_TTL_MS,
   });
 }
 
-const CODE_EXPLORER_CACHE_TTL_MS = 5 * 60 * 1000;
+// ---------------------------------------------------------------------------
+// Code explorer cache
+// ---------------------------------------------------------------------------
 
 const codeExplorerInFlight = new Map<string, Promise<CodeExplorerResult>>();
+
 const codeExplorerCache = new Map<
   string,
-  { result: CodeExplorerResult; expiresAt: number }
+  {
+    result: CodeExplorerResult;
+    expiresAt: number;
+  }
 >();
 
 function codeExplorerKey(repoFullName: string, issueNumber: number): string {
@@ -155,7 +193,10 @@ function codeExplorerKey(repoFullName: string, issueNumber: number): string {
 
 function getCachedCodeExplorer(key: string): CodeExplorerResult | null {
   const entry = codeExplorerCache.get(key);
-  if (!entry) return null;
+
+  if (!entry) {
+    return null;
+  }
 
   if (Date.now() > entry.expiresAt) {
     codeExplorerCache.delete(key);
@@ -165,10 +206,21 @@ function getCachedCodeExplorer(key: string): CodeExplorerResult | null {
   return entry.result;
 }
 
-function setCachedCodeExplorer(key: string, result: CodeExplorerResult) {
+function setCachedCodeExplorer(key: string, result: CodeExplorerResult): void {
+  if (
+    !codeExplorerCache.has(key) &&
+    codeExplorerCache.size >= MAX_CACHE_ENTRIES
+  ) {
+    const oldestKey = codeExplorerCache.keys().next().value;
+
+    if (oldestKey) {
+      codeExplorerCache.delete(oldestKey);
+    }
+  }
+
   codeExplorerCache.set(key, {
     result,
-    expiresAt: Date.now() + CODE_EXPLORER_CACHE_TTL_MS,
+    expiresAt: Date.now() + CACHE_TTL_MS,
   });
 }
 
@@ -177,7 +229,9 @@ function setCachedCodeExplorer(key: string, result: CodeExplorerResult) {
 // ---------------------------------------------------------------------------
 
 function parseRepoFullName(value: unknown): string | null {
-  if (typeof value !== "string") return null;
+  if (typeof value !== "string") {
+    return null;
+  }
 
   const repoFullName = value.trim();
 
@@ -185,9 +239,6 @@ function parseRepoFullName(value: unknown): string | null {
     return null;
   }
 
-  // GitHub owner/repository format.
-  // Allows normal GitHub names while rejecting URLs, paths and arbitrary
-  // prompt-like input.
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repoFullName)) {
     return null;
   }
@@ -262,12 +313,12 @@ function sanitizeDeepDiveContext(
 // JSON parsing helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Extracts the first balanced {...} block from a string.
- */
 function extractBalancedJson(input: string): string | null {
   const start = input.indexOf("{");
-  if (start === -1) return null;
+
+  if (start === -1) {
+    return null;
+  }
 
   let depth = 0;
   let inString = false;
@@ -291,9 +342,13 @@ function extractBalancedJson(input: string): string | null {
       continue;
     }
 
-    if (inString) continue;
+    if (inString) {
+      continue;
+    }
 
-    if (ch === "{") depth++;
+    if (ch === "{") {
+      depth++;
+    }
 
     if (ch === "}") {
       depth--;
@@ -315,6 +370,10 @@ function stripMarkdownFences(input: string): string {
     .replace(/\s*```$/i, "")
     .trim();
 }
+
+// ---------------------------------------------------------------------------
+// Agent output parsers
+// ---------------------------------------------------------------------------
 
 function parseIssuesResponse(text: string): IssuesResult | null {
   try {
@@ -481,10 +540,16 @@ function parseCodeExplorerResponse(text: string): CodeExplorerResult | null {
 }
 
 // ---------------------------------------------------------------------------
-// Agent execution
+// Error helpers
 // ---------------------------------------------------------------------------
 
 function isRateLimitError(error: any): boolean {
+  const status = error?.response?.status ?? error?.status ?? error?.statusCode;
+
+  if (status === 429) {
+    return true;
+  }
+
   const message = String(error?.message || error || "").toLowerCase();
 
   return (
@@ -493,6 +558,10 @@ function isRateLimitError(error: any): boolean {
     message.includes("too many requests")
   );
 }
+
+// ---------------------------------------------------------------------------
+// Agent execution
+// ---------------------------------------------------------------------------
 
 async function runAgent(
   agentName: string,
@@ -542,16 +611,12 @@ async function runAgent(
 
           console.log(`[${debugLabel}] turn status:`, status);
 
-          // Agent explicitly failed.
           if (status === "error") {
             throw new Error(
               (event.state as any)?.message || "Agent turn failed",
             );
           }
 
-          // Any status other than "done" is also a failure.
-          // Do not allow partial output to be interpreted as a
-          // malformed JSON response.
           if (status !== "done") {
             throw new Error(
               `Agent turn ended with unexpected status: ${status}`,
@@ -624,7 +689,6 @@ async function getIssuesForRepo(repoFullName: string): Promise<IssuesResult> {
         "Issue discovery agent returned an invalid response",
       );
 
-      // Keep raw output server-side only.
       err.raw = finalText;
 
       throw err;
@@ -693,10 +757,19 @@ async function getDeepDiveForIssue(
         "Issue deep-dive agent returned an invalid response",
       );
 
-      // Server-side only.
       err.raw = finalText;
 
       throw err;
+    }
+
+    // Never cache an answer for a different issue.
+    if (
+      parsed.repository !== repoFullName ||
+      parsed.issueNumber !== issueNumber
+    ) {
+      throw new Error(
+        `Agent returned mismatched issue: expected ${repoFullName}#${issueNumber}, got ${parsed.repository}#${parsed.issueNumber}`,
+      );
     }
 
     setCachedDeepDive(key, parsed);
@@ -813,10 +886,19 @@ async function getCodeExplorationForIssue(
         "Code explorer agent returned an invalid response",
       );
 
-      // Server-side only.
       err.raw = finalText;
 
       throw err;
+    }
+
+    // Never cache an answer for a different issue.
+    if (
+      parsed.repository !== repoFullName ||
+      parsed.issueNumber !== issueNumber
+    ) {
+      throw new Error(
+        `Agent returned mismatched issue: expected ${repoFullName}#${issueNumber}, got ${parsed.repository}#${parsed.issueNumber}`,
+      );
     }
 
     setCachedCodeExplorer(key, parsed);
@@ -867,7 +949,6 @@ router.post("/fetch", requireAuth, async (req: Request, res: Response) => {
       });
     }
 
-    // Do NOT expose error.raw/final model output to clients.
     return res.status(502).json({
       success: false,
       error: error?.message || "Failed to fetch issues",
@@ -917,7 +998,6 @@ router.post("/deep-dive", requireAuth, async (req: Request, res: Response) => {
       });
     }
 
-    // Never expose raw agent output.
     return res.status(502).json({
       success: false,
       error: error?.message || "Failed to run deep dive",
@@ -976,7 +1056,6 @@ router.post(
         });
       }
 
-      // Never expose raw model/tool output.
       return res.status(502).json({
         success: false,
         error: error?.message || "Failed to explore code",
