@@ -12,7 +12,7 @@ async function createDeveloperProfileAgent() {
       manifest: {
         model: {
           // Cerebras GPT-OSS 120B
-          name: "gpt-oss-120b/gpt-oss-120b",
+          name: "new-gemma-4-31b/gemma-4-31b",
 
           params: {
             max_tokens: 2500,
