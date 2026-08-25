@@ -16,3 +16,4 @@ export const DEV_PROFILE_AGENT_NAME = "developer-profile-agent";
 export const OSS_ISSUES_AGENT_NAME = "oss-issue-fetcher";
 export const OSS_ISSUE_DEEP_DIVE_AGENT_NAME = "oss-issue-deep-dive";
 export const OSS_CODE_EXPLORER_AGENT_NAME = "oss-issue-code-explorer";
+export const SOLVER_AGENT_NAME = "solver-agent";

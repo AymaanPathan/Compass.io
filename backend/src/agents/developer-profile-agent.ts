@@ -11,7 +11,7 @@ async function createDeveloperProfileAgent() {
 
       manifest: {
         model: {
-          // Cerebras GPT-OSS 120B
+          // Cerebras gemma-4-31b
           name: "new-gemma-4-31b/gemma-4-31b",
 
           params: {

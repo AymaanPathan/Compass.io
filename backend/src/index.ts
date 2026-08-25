@@ -7,6 +7,7 @@ import { connectDB } from "./config/db";
 import authRoutes from "./routes/auth";
 import githubRoutes from "./routes/github";
 import ossRoutes from "./routes/oss";
+import solverRoutes from "./routes/solver";
 import issuesRoutes from "./routes/issues";
 
 const app = express();
@@ -38,6 +39,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/github", githubRoutes);
 app.use("/api/oss", ossRoutes);
 app.use("/api/issues", issuesRoutes);
+app.use("/api/solver", solverRoutes);
 
 app.get("/", (_req: Request, res: Response) => {
   res.json({
