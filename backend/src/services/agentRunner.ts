@@ -4,6 +4,13 @@ interface RunAgentOptions {
   agentName: string;
   prompt: string;
   label: string;
+  /**
+   * Per-user GitHub OAuth access token. When provided, it's forwarded to
+   * the session's "github" MCP server so tools like get_me/search_repositories
+   * run against the correct authenticated developer's account instead of
+   * whatever default/service credentials the MCP server would otherwise use.
+   */
+  githubAccessToken?: string;
 }
 
 function extractTextContent(content: unknown): string {
@@ -55,6 +62,7 @@ export async function runAgent({
   agentName,
   prompt,
   label,
+  githubAccessToken,
 }: RunAgentOptions): Promise<string> {
   const startedAt = Date.now();
 
@@ -74,6 +82,21 @@ export async function runAgent({
       agent: {
         name: agentName,
       },
+      // Scope the GitHub MCP server to the authenticated user's own token
+      // for this session, rather than any shared/default credential, so
+      // tools like get_me resolve to the right developer.
+      ...(githubAccessToken
+        ? {
+            mcpServers: [
+              {
+                name: "github",
+                headers: {
+                  Authorization: `Bearer ${githubAccessToken}`,
+                },
+              },
+            ],
+          }
+        : {}),
     });
 
     console.log(`[agent:${label}] session created: ${session.id}`);
@@ -128,21 +151,21 @@ export async function runAgent({
         case "model.message.delta":
           if (event.toolCalls?.length) {
             for (const toolCall of event.toolCalls) {
-             const toolInfo = toolCall.toolInfo;
+              const toolInfo = toolCall.toolInfo;
 
-             if (toolInfo?.type === "mcp") {
-               console.log(
-                 `[agent:${label}] tool.call`,
-                 `tool=${toolInfo.name}`,
-                 `server=${toolInfo.serverName}`,
-               );
-             } else if (toolInfo) {
-               console.log(
-                 `[agent:${label}] tool.call`,
-                 `tool=${toolInfo.name}`,
-                 `type=${toolInfo.type}`,
-               );
-             }
+              if (toolInfo?.type === "mcp") {
+                console.log(
+                  `[agent:${label}] tool.call`,
+                  `tool=${toolInfo.name}`,
+                  `server=${toolInfo.serverName}`,
+                );
+              } else if (toolInfo) {
+                console.log(
+                  `[agent:${label}] tool.call`,
+                  `tool=${toolInfo.name}`,
+                  `type=${toolInfo.type}`,
+                );
+              }
             }
           }
 

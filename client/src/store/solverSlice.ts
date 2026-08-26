@@ -2,48 +2,36 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import type { AppDispatch } from "./store";
 
+// ------------------------------------------------------------
+// Input contract — MUST match the backend route / bounded-solver
+// agent's documented schema (repository / issue / executionPlan).
+// ------------------------------------------------------------
+
 export interface SolverInput {
-  matchedRepository: {
+  repository: {
     name: string;
     url: string;
-    description: string;
-    whyItMatches: string;
   };
   issue: { title: string; url: string };
-  explanation: {
-    whatIsHappening: string;
-    whyItMatters: string;
-    howToThinkAboutFixingIt: string;
-    thingsToKeepInMind: string[];
-  };
-  solveApproach: {
+  executionPlan: {
     summary: string;
-    steps: string[];
-    risks: string[];
-    testingNotes: string;
+    files: {
+      path: string;
+      action: "modify" | "create" | "delete";
+      instructions: string;
+    }[];
+    constraints: string[];
+    validation: {
+      command: string;
+    };
   };
-  relevantFiles: {
-    path: string;
-    url: string;
-    whyRelevant: string;
-    keySymbols: string[];
-  }[];
 }
 
 export interface SolverAgentResult {
-  status: "success" | "blocked" | "failed";
+  status: "success" | "already_satisfied" | "blocked" | "failed";
+  file?: string;
   reason?: string;
-  issue?: { title: string; url: string };
-  implementation?: {
-    summary: string;
-    filesChanged: { path: string; change: string }[];
-  };
-  validation?: {
-    testsRun: { command: string; result: string }[];
-    testSummary: string;
-    diffCheck: string;
-  };
-  finalDiff?: { filesChanged: number; insertions: number; deletions: number };
+  validation?: string;
   raw?: string;
 }
 
@@ -120,6 +108,11 @@ const initialState: SolverState = {
 
 const MAX_LOGS = 300;
 
+// "already_satisfied" is a valid, successful terminal outcome — it means
+// the solver checked the source and the requested change was already
+// present, not that anything failed.
+const SUCCESS_STATUSES = new Set(["success", "already_satisfied"]);
+
 const solverSlice = createSlice({
   name: "solver",
   initialState,
@@ -183,8 +176,9 @@ const solverSlice = createSlice({
     resultReceived(state, action: PayloadAction<SolverAgentResult>) {
       state.waiting = null;
       state.result = action.payload;
-      state.status =
-        action.payload.status === "success" ? "succeeded" : "failed";
+      state.status = SUCCESS_STATUSES.has(action.payload.status)
+        ? "succeeded"
+        : "failed";
     },
 
     fatalErrorReceived(state, action: PayloadAction<string>) {
@@ -208,7 +202,10 @@ export const {
 
 export default solverSlice.reducer;
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:5000";
+// Use the same env var every other client API call uses. The solver
+// previously read VITE_API_BASE_URL, which nobody set, so it silently
+// fell back to localhost in deployed browsers.
+const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:5000";
 
 function dispatchSolverEvent(
   dispatch: AppDispatch,

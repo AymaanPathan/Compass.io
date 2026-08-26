@@ -1,4 +1,5 @@
 import { Router, Request, Response } from "express";
+import { requireAuth, AuthRequest } from "../middleware/auth";
 import { agentClient, SOLVER_AGENT_NAME } from "../services/agentClient";
 import { withAgentRetry } from "../utils/retryAgentTurn";
 
@@ -6,12 +7,15 @@ const DEBUG_AGENT_EVENTS = process.env.DEBUG_AGENT_EVENTS !== "false";
 
 const router = Router();
 
+// ------------------------------------------------------------
+// Input contract — MUST match the bounded-solver agent's
+// documented input schema (repository / issue / executionPlan).
+// ------------------------------------------------------------
+
 interface SolverInput {
-  matchedRepository: {
+  repository: {
     name: string;
     url: string;
-    description: string;
-    whyItMatches: string;
   };
 
   issue: {
@@ -19,60 +23,33 @@ interface SolverInput {
     url: string;
   };
 
-  explanation: {
-    whatIsHappening: string;
-    whyItMatters: string;
-    howToThinkAboutFixingIt: string;
-    thingsToKeepInMind: string[];
-  };
-
-  solveApproach: {
+  executionPlan: {
     summary: string;
-    steps: string[];
-    risks: string[];
-    testingNotes: string;
-    testCommand: string;
-  };
 
-  relevantFiles: {
-    path: string;
-    url: string;
-    whyRelevant: string;
-    keySymbols: string[];
-  }[];
+    files: {
+      path: string;
+      action: "modify" | "create" | "delete";
+      instructions: string;
+    }[];
+
+    constraints: string[];
+
+    validation: {
+      command: string;
+    };
+  };
 }
 
 type SolverResult =
   | {
       status: "success";
-
-      issue?: {
-        title: string;
-        url: string;
-      };
-
-      implementation?: {
-        summary: string;
-        filesChanged: {
-          path: string;
-          change: string;
-        }[];
-      };
-
-      validation?: {
-        testsRun: {
-          command: string;
-          result: string;
-        }[];
-        testSummary: string;
-        diffCheck: string;
-      };
-
-      finalDiff?: {
-        filesChanged: number;
-        insertions: number;
-        deletions: number;
-      };
+      file?: string;
+      validation?: string;
+    }
+  | {
+      status: "already_satisfied";
+      file?: string;
+      reason?: string;
     }
   | {
       status: "blocked";
@@ -84,11 +61,15 @@ type SolverResult =
 
 function isValidSolverInput(input: any): input is SolverInput {
   return Boolean(
-    input?.matchedRepository &&
-    input?.issue &&
-    input?.explanation &&
-    input?.solveApproach &&
-    input?.relevantFiles,
+    input?.repository?.name &&
+    input?.repository?.url &&
+    input?.issue?.title &&
+    input?.issue?.url &&
+    input?.executionPlan &&
+    Array.isArray(input.executionPlan.files) &&
+    input.executionPlan.files.length > 0 &&
+    Array.isArray(input.executionPlan.constraints) &&
+    input.executionPlan.validation?.command,
   );
 }
 
@@ -218,8 +199,27 @@ type SolverStreamEvent =
       error: string;
     };
 
-function sendEvent(res: Response, payload: SolverStreamEvent): void {
-  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+// ------------------------------------------------------------
+// Per-request disconnect tracking
+// ------------------------------------------------------------
+
+class ClientDisconnected extends Error {
+  constructor() {
+    super("Client disconnected");
+    this.name = "ClientDisconnected";
+  }
+}
+
+function makeSendEvent(res: Response, isDisconnected: () => boolean) {
+  return (payload: SolverStreamEvent): void => {
+    if (isDisconnected()) return;
+
+    try {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    } catch {
+      // Response already closed/torn down — nothing to do.
+    }
+  };
 }
 
 // ------------------------------------------------------------
@@ -272,7 +272,8 @@ function labelForTool(name: string, args: string): string {
 async function runTurnStreamed(
   sessionId: string,
   content: string,
-  res: Response,
+  sendEvent: (payload: SolverStreamEvent) => void,
+  isDisconnected: () => boolean,
   toolCallLabels: Map<string, string>,
 ): Promise<string> {
   let finalText = "";
@@ -287,6 +288,14 @@ async function runTurnStreamed(
   });
 
   for await (const event of stream) {
+    // Stop consuming/forwarding as soon as the client is gone. We can't
+    // always cancel the upstream provider call, but we stop doing any
+    // further work on behalf of this request and let the retry loop see
+    // the disconnect and give up rather than starting a new turn.
+    if (isDisconnected()) {
+      throw new ClientDisconnected();
+    }
+
     const ts = Date.now();
 
     if (DEBUG_AGENT_EVENTS) {
@@ -298,7 +307,7 @@ async function runTurnStreamed(
 
     switch (event?.type) {
       case "turn.created": {
-        sendEvent(res, {
+        sendEvent({
           type: "log",
           ts,
           level: "info",
@@ -311,7 +320,7 @@ async function runTurnStreamed(
       case "thread.created": {
         const name = event.agentInfo?.name ?? event.title ?? event.threadId;
 
-        sendEvent(res, {
+        sendEvent({
           type: "log",
           ts,
           level: "info",
@@ -322,7 +331,7 @@ async function runTurnStreamed(
       }
 
       case "sandbox.created": {
-        sendEvent(res, {
+        sendEvent({
           type: "step",
           ts,
           stepId: `sandbox-${event.sandboxId}`,
@@ -338,7 +347,7 @@ async function runTurnStreamed(
 
       case "model.message.delta": {
         if (event.reasoningContent) {
-          sendEvent(res, {
+          sendEvent({
             type: "reasoning",
             ts,
             text: event.reasoningContent,
@@ -365,7 +374,7 @@ async function runTurnStreamed(
 
               toolCallLabels.set(call.id, label);
 
-              sendEvent(res, {
+              sendEvent({
                 type: "step",
                 ts,
                 stepId: call.id,
@@ -391,7 +400,7 @@ async function runTurnStreamed(
         }
 
         if (event.reasoningContent) {
-          sendEvent(res, {
+          sendEvent({
             type: "reasoning",
             ts,
             text: event.reasoningContent,
@@ -407,7 +416,7 @@ async function runTurnStreamed(
 
             toolCallLabels.set(call.id, label);
 
-            sendEvent(res, {
+            sendEvent({
               type: "step",
               ts,
               stepId: call.id,
@@ -432,7 +441,7 @@ async function runTurnStreamed(
 
         const detail = String(event.content ?? "").slice(0, 300);
 
-        sendEvent(res, {
+        sendEvent({
           type: "step",
           ts,
           stepId: event.toolCallId,
@@ -456,7 +465,7 @@ async function runTurnStreamed(
             : "a tool response"
         } — no human-in-the-loop handler is wired up on this route, so this will stall until timeout.`;
 
-        sendEvent(res, {
+        sendEvent({
           type: "log",
           ts,
           level: "warn",
@@ -469,7 +478,7 @@ async function runTurnStreamed(
       }
 
       case "mcp.auth_required": {
-        sendEvent(res, {
+        sendEvent({
           type: "log",
           ts,
           level: "warn",
@@ -489,7 +498,7 @@ async function runTurnStreamed(
             finalText = outputText;
           }
 
-          sendEvent(res, {
+          sendEvent({
             type: "log",
             ts,
             level: "info",
@@ -500,7 +509,7 @@ async function runTurnStreamed(
         if (event.state?.status === "error") {
           const message = event.state.message || "Agent turn failed";
 
-          sendEvent(res, {
+          sendEvent({
             type: "log",
             ts,
             level: "error",
@@ -511,7 +520,7 @@ async function runTurnStreamed(
         }
 
         if (event.state?.status === "cancelled") {
-          sendEvent(res, {
+          sendEvent({
             type: "log",
             ts,
             level: "warn",
@@ -541,7 +550,8 @@ async function runTurnStreamed(
 
 async function runSolverAgentStreamed(
   input: SolverInput,
-  res: Response,
+  sendEvent: (payload: SolverStreamEvent) => void,
+  isDisconnected: () => boolean,
 ): Promise<SolverResult & { raw?: string }> {
   // Create exactly one session per request.
   //
@@ -557,7 +567,7 @@ async function runSolverAgentStreamed(
 
   console.log(`[solver agent] session created: ${session.id}`);
 
-  sendEvent(res, {
+  sendEvent({
     type: "log",
     ts: Date.now(),
     level: "info",
@@ -572,13 +582,26 @@ async function runSolverAgentStreamed(
 
   const finalText = await withAgentRetry(
     async () => {
+      // Give up before starting a brand-new turn if the client is gone —
+      // no point spending another attempt (and provider/sandbox capacity)
+      // on a request nobody is listening to anymore.
+      if (isDisconnected()) {
+        throw new ClientDisconnected();
+      }
+
       const content = isFirstAttempt
         ? buildInitialMessage(input)
         : buildResumeMessage(lastRetryReason);
 
       isFirstAttempt = false;
 
-      return runTurnStreamed(session.id, content, res, toolCallLabels);
+      return runTurnStreamed(
+        session.id,
+        content,
+        sendEvent,
+        isDisconnected,
+        toolCallLabels,
+      );
     },
     {
       // Keep retries bounded.
@@ -593,6 +616,8 @@ async function runSolverAgentStreamed(
       maxCancelledAttempts: 10,
 
       onWait: (info) => {
+        if (isDisconnected()) return;
+
         lastRetryReason = info.kind;
 
         const ts = Date.now();
@@ -612,7 +637,7 @@ async function runSolverAgentStreamed(
 
         console.warn(`[solver agent] ${message}`);
 
-        sendEvent(res, {
+        sendEvent({
           type: "waiting",
           ts,
           reason: info.kind,
@@ -634,13 +659,13 @@ async function runSolverAgentStreamed(
 // POST /api/solver/run
 // ------------------------------------------------------------
 
-router.post("/run", async (req: Request, res: Response) => {
+router.post("/run", requireAuth, async (req: AuthRequest, res: Response) => {
   const input = req.body as Partial<SolverInput>;
 
   if (!isValidSolverInput(input)) {
     return res.status(400).json({
       error:
-        "Missing required fields: matchedRepository, issue, explanation, solveApproach, relevantFiles",
+        "Missing or invalid fields: repository{name,url}, issue{title,url}, executionPlan{files[],constraints[],validation.command}",
     });
   }
 
@@ -652,34 +677,53 @@ router.post("/run", async (req: Request, res: Response) => {
 
   res.flushHeaders?.();
 
+  let disconnected = false;
+  const isDisconnected = () => disconnected;
+
   const heartbeat = setInterval(() => {
-    res.write(": heartbeat\n\n");
+    if (disconnected) return;
+
+    try {
+      res.write(": heartbeat\n\n");
+    } catch {
+      // ignore — close handler will clean up
+    }
   }, 15_000);
 
   req.on("close", () => {
+    disconnected = true;
     clearInterval(heartbeat);
+    console.log("[solver route] client disconnected — stopping retries/writes");
   });
 
+  const sendEvent = makeSendEvent(res, isDisconnected);
+
   try {
-    const result = await runSolverAgentStreamed(input as SolverInput, res);
+    const result = await runSolverAgentStreamed(
+      input as SolverInput,
+      sendEvent,
+      isDisconnected,
+    );
 
     console.log(
       "[solver agent] final output length:",
       (result.raw ?? "").length,
     );
 
-    sendEvent(res, {
+    sendEvent({
       type: "result",
       ts: Date.now(),
       result,
     });
   } catch (error: any) {
-    if (isIterationLimitError(error)) {
+    if (error instanceof ClientDisconnected) {
+      console.log("[solver route] aborted after client disconnect");
+    } else if (isIterationLimitError(error)) {
       console.warn(
         "[solver route] Agent hit iteration limit — returning blocked",
       );
 
-      sendEvent(res, {
+      sendEvent({
         type: "result",
         ts: Date.now(),
         result: {
@@ -693,7 +737,7 @@ router.post("/run", async (req: Request, res: Response) => {
         error.response?.data || error.message || error,
       );
 
-      sendEvent(res, {
+      sendEvent({
         type: "fatal",
         ts: Date.now(),
         error: error.message || "Solver agent execution failed",
@@ -701,7 +745,9 @@ router.post("/run", async (req: Request, res: Response) => {
     }
   } finally {
     clearInterval(heartbeat);
-    res.end();
+    if (!disconnected) {
+      res.end();
+    }
   }
 });
 
