@@ -1,11 +1,9 @@
 import { Router, Response } from "express";
-import User, { IUser } from "../models/User";
+import User from "../models/User";
 import { requireAuth, AuthRequest } from "../middleware/auth";
-import { agentClient, DEV_PROFILE_AGENT_NAME } from "../services/agentClient";
-import { withAgentRetry } from "../utils/retryAgentTurn";
-import { githubClient } from "../utils/githubClient";
-
-const DEBUG_AGENT_EVENTS = process.env.DEBUG_AGENT_EVENTS === "true";
+import { DEV_PROFILE_AGENT_NAME } from "../services/agentClient";
+import { runAgent, resumeAgent, AgentRunResult } from "../services/agentRunner";
+import { parseAgentJson } from "../utils/agentResponseToJson";
 
 const router = Router();
 
@@ -32,210 +30,66 @@ export interface DeveloperProfile {
 }
 
 /**
- * Extract text safely from Agent SDK model message events.
- *
- * event.content can now be:
- *
- * string
- *
- * OR
- *
- * [
- *   { type: "...", text/content/... },
- *   ...
- * ]
+ * Shared handling for whatever runAgent/resumeAgent returns: either persist
+ * the finished profile, or persist the paused session id + status and tell
+ * the client where to send the user to authorize.
  */
-function extractText(event: any): string | null {
-  if (!event) return null;
+async function handleAgentResult(
+  user: InstanceType<typeof User>,
+  result: AgentRunResult,
+  res: Response,
+) {
+  if (result.status === "auth_required") {
+    user.developerProfileSessionId = result.sessionId;
+    user.developerProfileStatus = "auth_required";
 
-  if (
-    (event.type === "model.message.delta" || event.type === "model.message") &&
-    event.content
-  ) {
-    return extractOutputText(event.content);
+    await user.save();
+
+    console.log(
+      `[dev-profile] auth required user=${user.username} session=${result.sessionId}`,
+    );
+
+    return res.status(202).json({
+      success: false,
+      status: "auth_required",
+      sessionId: result.sessionId,
+      authUrls: result.authUrls,
+    });
   }
 
-  return null;
-}
+  const profile = parseAgentJson<DeveloperProfile>(result.text);
 
-function extractOutputText(content: any): string {
-  if (!content) return "";
+  if (!profile) {
+    console.error(`[dev-profile] invalid JSON returned by agent`);
 
-  // Old/simple SDK format
-  if (typeof content === "string") {
-    return content;
+    user.developerProfileStatus = "idle";
+    user.developerProfileSessionId = undefined;
+    await user.save();
+
+    return res.status(500).json({
+      success: false,
+      error: "Agent returned invalid profile JSON",
+      raw: result.text,
+    });
   }
 
-  // Array of content items
-  if (Array.isArray(content)) {
-    return content
-      .map((item) => {
-        if (typeof item === "string") {
-          return item;
-        }
+  user.developerProfile = profile as any;
+  user.developerProfileRaw = result.text;
+  user.developerProfileParseFailed = false;
+  user.developerProfileGeneratedAt = new Date();
 
-        // Typical text content item
-        if (typeof item?.text === "string") {
-          return item.text;
-        }
+  user.developerProfileSessionId = undefined;
+  user.developerProfileStatus = "idle";
 
-        if (typeof item?.content === "string") {
-          return item.content;
-        }
-
-        return "";
-      })
-      .join("");
-  }
-
-  // Object-based content
-  if (typeof content?.text === "string") {
-    return content.text;
-  }
-
-  return "";
-}
-
-function parseProfileResponse(text: string): DeveloperProfile | null {
-  try {
-    const cleaned = text.trim().replace(/^```json\s*|\s*```$/g, "");
-
-    const parsed = JSON.parse(cleaned);
-
-    if (
-      !parsed.builderArchetype ||
-      !Array.isArray(parsed.strongestTechnologies)
-    ) {
-      return null;
-    }
-
-    return parsed as DeveloperProfile;
-  } catch {
-    return null;
-  }
-}
-
-async function getOrCreateProfileSession(user: IUser) {
-  const existingSessionId =
-    user.developerProfileSessionId ??
-    (user as any).developerProfileConversationId;
-
-  if (existingSessionId) {
-    try {
-      console.log("♻️ Reusing session:", existingSessionId);
-
-      const response = await agentClient.sessions.get(existingSessionId);
-
-      if (!user.developerProfileSessionId) {
-        user.developerProfileSessionId = existingSessionId;
-        await user.save();
-      }
-
-      return response.data;
-    } catch (err) {
-      console.warn("Session invalid, creating new one", err);
-    }
-  }
-
-  const response = await agentClient.sessions.create({
-    agent: {
-      name: DEV_PROFILE_AGENT_NAME,
-    },
-  });
-
-  const session = response.data;
-
-  console.log("🆕 Created session:", session.id);
-
-  user.developerProfileSessionId = session.id;
   await user.save();
 
-  return session;
-}
-// The developer-profile-agent has its own GitHub MCP tools
-// (get_me, search_repositories, list_commits, search_code) preloaded.
-//
-// It gathers evidence itself. We just trigger the analysis instruction
-// and let the agent explore the authenticated developer's GitHub profile.
-async function runProfileAgent(user: IUser): Promise<string> {
-  return withAgentRetry(async () => {
-    const github = githubClient(user.accessToken);
+  console.log(`[dev-profile] profile saved user=${user.username}`);
 
-    const { data: githubUser } = await github.get("/user");
-
-    if (githubUser.login !== user.username) {
-      throw new Error(
-        `GitHub identity mismatch: expected ${user.username}, got ${githubUser.login}`,
-      );
-    }
-
-    const { data: repositories } = await github.get("/user/repos", {
-      params: {
-        per_page: 100,
-        sort: "updated",
-      },
-    });
-
-    const session = await getOrCreateProfileSession(user);
-
-    let finalText = "";
-
-    const stream = await agentClient.sessions.createTurnStream(session.id, {
-      input: [
-        {
-          type: "user.message",
-          content: `
-Analyze the GitHub developer using the authenticated GitHub data provided below.
-
-GitHub user:
-${JSON.stringify(githubUser, null, 2)}
-
-Repositories:
-${JSON.stringify(repositories, null, 2)}
-
-Authenticated GitHub username:
-${githubUser.login}
-
-Use this data as the source of truth for the developer being analyzed.
-
-Do not analyze or assume another GitHub user.
-
-Produce the developer profile exactly as specified in your instructions.
-`,
-        },
-      ],
-    });
-
-    for await (const event of stream) {
-      if (DEBUG_AGENT_EVENTS) {
-        console.log(`[profile agent event] ${event?.type}`);
-      }
-      // Stream chunks as they arrive
-      const chunk = extractText(event);
-
-      if (chunk) {
-        finalText += chunk;
-      }
-
-      // Get canonical final output when finished
-      if (event?.type === "turn.done") {
-        console.log("[profile agent] turn status:", event.state?.status);
-
-        if (event.state?.status === "done") {
-          const outputText = extractOutputText(event.state.output?.content);
-
-          if (outputText) {
-            finalText = outputText;
-          }
-        }
-
-        if (event.state?.status === "error") {
-          throw new Error(event.state.message || "Agent turn failed");
-        }
-      }
-    }
-
-    return finalText.trim();
+  return res.json({
+    success: true,
+    profile,
+    cached: false,
+    generatedAt: user.developerProfileGeneratedAt,
   });
 }
 
@@ -250,84 +104,58 @@ router.get("/profile", requireAuth, async (req: AuthRequest, res: Response) => {
       });
     }
 
-    const forceRefresh = req.query.refresh === "true";
+    const refresh = req.query.refresh === "true";
 
-    /**
-     * Serve cached profile unless caller explicitly requests refresh.
-     */
-    if (!forceRefresh && user.developerProfile) {
+    console.log(
+      `[dev-profile] request user=${user.username} refresh=${refresh}`,
+    );
+
+    if (!refresh && user.developerProfile) {
+      console.log(
+        `[dev-profile] returning cached profile user=${user.username}`,
+      );
+
       return res.json({
         success: true,
         profile: user.developerProfile,
-        raw: user.developerProfileRaw ?? null,
-        parseFailed: user.developerProfileParseFailed ?? false,
         cached: true,
         generatedAt: user.developerProfileGeneratedAt,
       });
     }
 
-    /**
-     * Run the developer profile agent.
-     */
-    const finalText = await runProfileAgent(user);
-
-    console.log("[profile agent] final output length:", finalText.length);
-
-    const profile = parseProfileResponse(finalText);
-
-    /**
-     * If parsing fails, store the raw agent output.
-     */
-    if (!profile) {
-      console.warn(
-        "Developer profile agent: failed to parse JSON, returning raw fallback",
-      );
-
-      user.developerProfileRaw = finalText;
-      user.developerProfileParseFailed = true;
-      user.developerProfileGeneratedAt = new Date();
-
-      await user.save();
-
-      return res.json({
-        success: true,
-        profile: null,
-        raw: finalText,
-        parseFailed: true,
-        cached: false,
+    if (
+      user.developerProfileStatus === "running" ||
+      user.developerProfileStatus === "auth_required"
+    ) {
+      return res.status(409).json({
+        success: false,
+        status: user.developerProfileStatus,
+        sessionId: user.developerProfileSessionId,
+        message: "Developer profile analysis is already in progress",
       });
     }
 
-    /**
-     * Persist successful parsed profile.
-     */
-    user.developerProfile = profile as any;
-    user.developerProfileRaw = finalText;
-    user.developerProfileParseFailed = false;
-    user.developerProfileGeneratedAt = new Date();
+    console.log(`[dev-profile] generating profile user=${user.username}`);
 
+    user.developerProfileStatus = "running";
     await user.save();
 
-    return res.json({
-      success: true,
-      profile,
-      raw: finalText,
-      parseFailed: false,
-      cached: false,
-      generatedAt: user.developerProfileGeneratedAt,
+    // GitHub auth is handled per-session by TrueForge's own MCP OAuth flow
+    // (mcp.auth_required -> authUrl -> resume), not by forwarding a stored
+    // access token. See handleAgentResult for the auth_required branch.
+    const result = await runAgent({
+      agentName: DEV_PROFILE_AGENT_NAME,
+      label: "dev-profile",
+      prompt:
+        "Analyze the authenticated GitHub developer and return the developer profile.",
     });
+
+    return await handleAgentResult(user, result, res);
   } catch (error: any) {
     console.error(
-      "Developer profile fetch error:",
-      error.response?.data || error.message || error,
+      "[dev-profile] failed:",
+      error?.response?.data || error?.message || error,
     );
-
-    if (error.response?.status === 401) {
-      return res.status(401).json({
-        success: false,
-        error: "GitHub token invalid, please log in again",
-      });
-    }
 
     return res.status(500).json({
       success: false,
@@ -335,5 +163,58 @@ router.get("/profile", requireAuth, async (req: AuthRequest, res: Response) => {
     });
   }
 });
+
+/**
+ * Call after the user completes the GitHub OAuth flow for a session that
+ * previously paused on mcp.auth_required. Resumes with empty input per
+ * TrueForge's docs — no user.message on the resuming turn.
+ */
+router.post(
+  "/profile/resume",
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const user = await User.findById(req.userId);
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: "User not found",
+        });
+      }
+
+      if (
+        !user.developerProfileSessionId ||
+        user.developerProfileStatus !== "auth_required"
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: "No pending GitHub authorization",
+        });
+      }
+
+      console.log(
+        `[dev-profile] resuming user=${user.username} session=${user.developerProfileSessionId}`,
+      );
+
+      const result = await resumeAgent({
+        sessionId: user.developerProfileSessionId,
+        label: "dev-profile-resume",
+      });
+
+      return await handleAgentResult(user, result, res);
+    } catch (error: any) {
+      console.error(
+        "[dev-profile] resume failed:",
+        error?.response?.data || error?.message || error,
+      );
+
+      return res.status(500).json({
+        success: false,
+        error: "Failed to resume profile analysis",
+      });
+    }
+  },
+);
 
 export default router;
