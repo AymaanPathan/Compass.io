@@ -1,24 +1,34 @@
-const DEFAULT_MAX_ATTEMPTS = 2;
-const DEFAULT_BASE_DELAY_MS = 1500;
-const DEFAULT_MAX_DELAY_MS = 30_000;
+const DEFAULT_MAX_ATTEMPTS = 10;
 
-// Rate limits (429) are typically per-minute windows, not transient blips.
-// Exponential backoff starting at 1.5s just wastes attempts hitting the
-// same wall. When we see a 429, wait close to a full window instead.
-const DEFAULT_RATE_LIMIT_DELAY_MS = 65_000;
-const DEFAULT_MAX_RATE_LIMIT_ATTEMPTS = 2;
+const DEFAULT_DELAY_MS = 60_000; // exactly 1 minute
+
+const DEFAULT_MAX_RATE_LIMIT_ATTEMPTS = 10;
+const DEFAULT_RATE_LIMIT_DELAY_MS = 60_000; // exactly 1 minute
+
+const DEFAULT_MAX_CANCELLED_ATTEMPTS = 10;
+const DEFAULT_CANCELLED_DELAY_MS = 60_000; // exactly 1 minute
+
+interface WaitInfo {
+  kind: "rate_limited" | "retryable" | "cancelled";
+  attempt: number;
+  maxAttempts: number;
+  waitMs: number;
+}
 
 interface RetryOptions {
   maxAttempts?: number;
-  baseDelayMs?: number;
-  maxDelayMs?: number;
-  /** Attempts specifically for 429s, tracked separately from maxAttempts. */
+  delayMs?: number;
+
   maxRateLimitAttempts?: number;
-  /** Fixed wait used for 429s when the response has no retry-after header. */
   rateLimitDelayMs?: number;
+
+  maxCancelledAttempts?: number;
+  cancelledDelayMs?: number;
+
+  onWait?: (info: WaitInfo) => void;
 }
 
-type ErrorKind = "rate_limited" | "retryable" | "fatal";
+type ErrorKind = "rate_limited" | "retryable" | "cancelled" | "fatal";
 
 function classifyError(error: any): ErrorKind {
   const status = error?.response?.status ?? error?.status ?? error?.statusCode;
@@ -37,8 +47,24 @@ function classifyError(error: any): ErrorKind {
 
   const message = String(error?.message || error || "").toLowerCase();
 
-  if (message.includes("rate limit") || message.includes("too many requests")) {
+  if (
+    message.includes("rate limit") ||
+    message.includes("too many requests") ||
+    message.includes("429")
+  ) {
     return "rate_limited";
+  }
+
+  if (
+    message.includes("agent turn cancelled") ||
+    message.includes("abandoned")
+  ) {
+    return "cancelled";
+  }
+
+  // Iteration-limit errors are terminal.
+  if (message.includes("iteration limit")) {
+    return "fatal";
   }
 
   if (
@@ -54,15 +80,17 @@ function classifyError(error: any): ErrorKind {
   return "fatal";
 }
 
-/** Reads a numeric retry-after value (seconds) off common error shapes, if present. */
 function getRetryAfterMs(error: any): number | null {
   const headerVal =
     error?.response?.headers?.["retry-after"] ??
     error?.headers?.["retry-after"];
 
-  if (!headerVal) return null;
+  if (!headerVal) {
+    return null;
+  }
 
   const seconds = Number(headerVal);
+
   if (Number.isFinite(seconds) && seconds > 0) {
     return seconds * 1000;
   }
@@ -75,97 +103,176 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * Runs `fn` and retries it if it throws an error that looks retryable
- * (rate limits, timeouts, transient connection errors, or an explicit
- * agent-turn failure). Non-retryable errors are rethrown immediately.
+ * Execute an agent turn with bounded retries.
  *
- * Two separate retry policies are applied depending on error type:
+ * Retry behavior:
  *
- * - RATE LIMITED (429 / "rate limit" / "too many requests"): waits
- *   `retry-after` if the error provides it, otherwise a fixed
- *   `rateLimitDelayMs` (default 65s), for up to `maxRateLimitAttempts`
- *   tries. Short backoffs cannot outrun a per-minute ceiling, so this
- *   path intentionally does not use exponential backoff.
+ * - Maximum 10 total attempts.
+ * - Rate-limit retries wait exactly 1 minute.
+ * - Cancelled retries wait exactly 1 minute.
+ * - Generic transient retries wait exactly 1 minute.
+ * - No exponential backoff.
+ * - No jitter.
+ * - Fatal errors are never retried.
  *
- * - OTHER RETRYABLE (502/503/504/timeouts/connection resets): uses
- *   exponential backoff + jitter starting at `baseDelayMs`, for up to
- *   `maxAttempts` tries, as before.
- *
- * Rate-limit retries and general retries are tracked with independent
- * counters, so a run that hits one 429 and one 503 gets a fair shot at
- * both policies rather than sharing a single attempt budget.
- *
- * Callers whose agent makes many tool calls per turn (and so is more
- * likely to trip a per-minute ceiling mid-run, e.g. a code-explorer
- * agent) should pass a larger `baseDelayMs` explicitly rather than
- * relying on the default, which is sized for light callers like
- * issue discovery / deep dive.
+ * A provider Retry-After header is respected for 429 responses.
+ * If no Retry-After header exists, the retry waits exactly 1 minute.
  */
 export async function withAgentRetry<T>(
   fn: () => Promise<T>,
   options?: RetryOptions,
 ): Promise<T> {
   const maxAttempts = options?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-  const baseDelayMs = options?.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
-  const maxDelayMs = options?.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
+
+  const delayMs = options?.delayMs ?? DEFAULT_DELAY_MS;
+
   const maxRateLimitAttempts =
     options?.maxRateLimitAttempts ?? DEFAULT_MAX_RATE_LIMIT_ATTEMPTS;
+
   const rateLimitDelayMs =
     options?.rateLimitDelayMs ?? DEFAULT_RATE_LIMIT_DELAY_MS;
 
-  let lastError: any;
-  let attempt = 0;
+  const maxCancelledAttempts =
+    options?.maxCancelledAttempts ?? DEFAULT_MAX_CANCELLED_ATTEMPTS;
+
+  const cancelledDelayMs =
+    options?.cancelledDelayMs ?? DEFAULT_CANCELLED_DELAY_MS;
+
   let rateLimitAttempt = 0;
+  let cancelledAttempt = 0;
+  let retryableAttempt = 0;
 
-  // Total tries is bounded by the sum of both budgets so a pathological
-  // mix of errors can't retry forever.
-  const maxTotalTries = maxAttempts + maxRateLimitAttempts;
+  let lastError: unknown;
 
-  for (let tries = 1; tries <= maxTotalTries; tries++) {
+  /*
+   * GLOBAL attempt budget.
+   *
+   * Maximum of 10 agent turns total.
+   *
+   * This prevents:
+   *
+   * 10 generic + 10 rate-limit + 10 cancelled
+   *
+   * from producing 30 turns.
+   */
+  const maxTotalAttempts = maxAttempts;
+
+  for (let totalAttempt = 1; totalAttempt <= maxTotalAttempts; totalAttempt++) {
     try {
       return await fn();
     } catch (error) {
       lastError = error;
+
       const kind = classifyError(error);
 
+      console.warn(
+        `[withAgentRetry] attempt ${totalAttempt}/${maxTotalAttempts} failed: ${kind}`,
+      );
+
+      /*
+       * Fatal errors are never retried.
+       */
       if (kind === "fatal") {
         throw error;
       }
 
+      /*
+       * Global attempt limit reached.
+       */
+      if (totalAttempt >= maxTotalAttempts) {
+        throw error;
+      }
+
+      /*
+       * RATE LIMIT
+       *
+       * Wait exactly 1 minute unless Cerebras explicitly
+       * provides a Retry-After header.
+       */
       if (kind === "rate_limited") {
         rateLimitAttempt++;
-        if (rateLimitAttempt >= maxRateLimitAttempts) {
+
+        if (rateLimitAttempt > maxRateLimitAttempts) {
           throw error;
         }
 
         const waitMs = getRetryAfterMs(error) ?? rateLimitDelayMs;
 
+        options?.onWait?.({
+          kind: "rate_limited",
+          attempt: rateLimitAttempt,
+          maxAttempts: maxRateLimitAttempts,
+          waitMs,
+        });
+
         console.warn(
-          `[withAgentRetry] rate limited (attempt ${rateLimitAttempt}/${maxRateLimitAttempts}), waiting ${waitMs}ms`,
+          `[withAgentRetry] rate limited ` +
+            `(${rateLimitAttempt}/${maxRateLimitAttempts}), ` +
+            `waiting ${waitMs}ms`,
         );
+
         await delay(waitMs);
         continue;
       }
 
-      // kind === "retryable"
-      attempt++;
-      if (attempt >= maxAttempts) {
+      /*
+       * CANCELLED / ABANDONED
+       *
+       * Always wait exactly 1 minute.
+       */
+      if (kind === "cancelled") {
+        cancelledAttempt++;
+
+        if (cancelledAttempt > maxCancelledAttempts) {
+          throw error;
+        }
+
+        const waitMs = cancelledDelayMs;
+
+        options?.onWait?.({
+          kind: "cancelled",
+          attempt: cancelledAttempt,
+          maxAttempts: maxCancelledAttempts,
+          waitMs,
+        });
+
+        console.warn(
+          `[withAgentRetry] cancelled ` +
+            `(${cancelledAttempt}/${maxCancelledAttempts}), ` +
+            `waiting ${waitMs}ms`,
+        );
+
+        await delay(waitMs);
+        continue;
+      }
+
+      /*
+       * GENERIC TRANSIENT FAILURE
+       *
+       * Always wait exactly 1 minute.
+       */
+      retryableAttempt++;
+
+      if (retryableAttempt > maxAttempts) {
         throw error;
       }
 
-      const rawBackoff = baseDelayMs * Math.pow(2, attempt - 1);
-      const cappedBackoff = Math.min(rawBackoff, maxDelayMs);
-      // +/- up to 20% jitter so concurrent requests that failed together
-      // don't all retry on the same tick and re-trip the limit.
-      const jitter = cappedBackoff * 0.2 * (Math.random() * 2 - 1);
-      const backoffMs = Math.round(cappedBackoff + jitter);
+      const waitMs = delayMs;
+
+      options?.onWait?.({
+        kind: "retryable",
+        attempt: retryableAttempt,
+        maxAttempts,
+        waitMs,
+      });
 
       console.warn(
-        `[withAgentRetry] attempt ${attempt}/${maxAttempts} failed (${
-          (error as Error)?.message
-        }), retrying in ${backoffMs}ms`,
+        `[withAgentRetry] retryable failure ` +
+          `(${retryableAttempt}/${maxAttempts}), ` +
+          `waiting ${waitMs}ms`,
       );
-      await delay(backoffMs);
+
+      await delay(waitMs);
     }
   }
 

@@ -1,8 +1,7 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import { createSlice, createAsyncThunk,type PayloadAction } from "@reduxjs/toolkit";
-import api from "../api/axios";
+import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
+import { fetchMe, logout as logoutRequest } from "../api/axios";
 
-interface User {
+export interface AuthUser {
   _id: string;
   username: string;
   displayName: string;
@@ -11,31 +10,24 @@ interface User {
 }
 
 interface AuthState {
-  user: User | null;
+  user: AuthUser | null;
   status: "idle" | "loading" | "authenticated" | "unauthenticated";
-  error: string | null;
 }
 
 const initialState: AuthState = {
   user: null,
   status: "idle",
-  error: null,
 };
 
-export const fetchCurrentUser = createAsyncThunk(
-  "auth/fetchCurrentUser",
-  async (_, { rejectWithValue }) => {
-    try {
-      const res = await api.get("/api/auth/me");
-      return res.data.user as User;
-    } catch (err: any) {
-      return rejectWithValue(err.response?.data?.error || "Not authenticated");
-    }
+export const loadCurrentUser = createAsyncThunk(
+  "auth/loadCurrentUser",
+  async () => {
+    return await fetchMe();
   },
 );
 
-export const logoutUser = createAsyncThunk("auth/logoutUser", async () => {
-  await api.post("/api/auth/logout");
+export const logout = createAsyncThunk("auth/logout", async () => {
+  await logoutRequest();
 });
 
 const authSlice = createSlice({
@@ -44,25 +36,20 @@ const authSlice = createSlice({
   reducers: {},
   extraReducers: (builder) => {
     builder
-      .addCase(fetchCurrentUser.pending, (state) => {
+      .addCase(loadCurrentUser.pending, (state) => {
         state.status = "loading";
       })
-      .addCase(
-        fetchCurrentUser.fulfilled,
-        (state, action: PayloadAction<User>) => {
-          state.status = "authenticated";
-          state.user = action.payload;
-          state.error = null;
-        },
-      )
-      .addCase(fetchCurrentUser.rejected, (state, action) => {
-        state.status = "unauthenticated";
-        state.user = null;
-        state.error = action.payload as string;
+      .addCase(loadCurrentUser.fulfilled, (state, action) => {
+        state.user = action.payload;
+        state.status = "authenticated";
       })
-      .addCase(logoutUser.fulfilled, (state) => {
-        state.status = "unauthenticated";
+      .addCase(loadCurrentUser.rejected, (state) => {
         state.user = null;
+        state.status = "unauthenticated";
+      })
+      .addCase(logout.fulfilled, (state) => {
+        state.user = null;
+        state.status = "unauthenticated";
       });
   },
 });

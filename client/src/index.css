@@ -1,1 +1,53 @@
 @import "tailwindcss";
+
+:root {
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+ 
+  --accent-run: #f0b429;    /* running / in-progress */
+  --accent-ok: #34d399;     /* success / already satisfied */
+  --accent-blocked: #f97316; /* blocked */
+  --accent-fail: #f43f5e;   /* failed / fatal error */
+}
+ 
+html, body, #root {
+  height: 100%;
+  background: #000;
+}
+ 
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+ 
+.font-display { font-family: var(--font-display); }
+.font-mono-brand { font-family: var(--font-mono); }
+ 
+/* Live "agent is working" pulse used on running pipeline nodes and steps */
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgba(240, 180, 41, 0.45); }
+  70% { box-shadow: 0 0 0 8px rgba(240, 180, 41, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(240, 180, 41, 0); }
+}
+.agent-pulse { animation: pulse-ring 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+ 
+@keyframes blink-caret {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.terminal-caret::after {
+  content: "▍";
+  animation: blink-caret 1s step-end infinite;
+  color: var(--accent-run);
+}
+ 
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in-up { animation: fade-in-up 0.28s ease-out both; }
+ 
+/* Thin scrollbars for the terminal feed */
+.thin-scroll::-webkit-scrollbar { width: 6px; }
+.thin-scroll::-webkit-scrollbar-track { background: transparent; }
+.thin-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 4px; }
+ 
