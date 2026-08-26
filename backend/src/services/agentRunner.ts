@@ -82,6 +82,12 @@ async function consumeStream(
 ): Promise<AgentRunResult> {
   let eventCount = 0;
 
+  // Track state across deltas so a failed/truncated turn still leaves us
+  // something useful to log instead of just the last 120-char fragment.
+  let accumulatedOutput = "";
+  let lastFinishReason: string | undefined;
+  const toolCallLog: string[] = [];
+
   for await (const { data: event } of stream.withMetadata()) {
     eventCount++;
 
@@ -104,25 +110,39 @@ async function consumeStream(
       case "model.message.delta":
         if (event.toolCalls?.length) {
           for (const toolCall of event.toolCalls) {
-            const toolInfo = toolCall.toolInfo;
+            const toolInfo = (toolCall as any).toolInfo;
+            const args =
+              (toolCall as any).arguments ??
+              (toolCall as any).input ??
+              undefined;
 
             if (toolInfo?.type === "mcp") {
-              console.log(
-                `[agent:${label}] tool.call`,
-                `tool=${toolInfo.name}`,
-                `server=${toolInfo.serverName}`,
-              );
+              const line = `tool=${toolInfo.name} server=${toolInfo.serverName}${
+                args ? ` args=${preview(args, 200)}` : ""
+              }`;
+              toolCallLog.push(line);
+              console.log(`[agent:${label}] tool.call`, line);
             } else if (toolInfo) {
-              console.log(
-                `[agent:${label}] tool.call`,
-                `tool=${toolInfo.name}`,
-                `type=${toolInfo.type}`,
+              const line = `tool=${toolInfo.name} type=${toolInfo.type}${
+                args ? ` args=${preview(args, 200)}` : ""
+              }`;
+              toolCallLog.push(line);
+              console.log(`[agent:${label}] tool.call`, line);
+            } else {
+              // No toolInfo at all — this is the case that was previously
+              // silent, e.g. the model calling a tool not in enableTools.
+              const raw = preview(toolCall, 300);
+              toolCallLog.push(`unrecognized tool.call raw=${raw}`);
+              console.warn(
+                `[agent:${label}] tool.call (unrecognized/rejected)`,
+                raw,
               );
             }
           }
         }
 
         if (event.content) {
+          accumulatedOutput += event.content;
           console.log(
             `[agent:${label}] model.output.delta`,
             preview(event.content, 120),
@@ -130,6 +150,7 @@ async function consumeStream(
         }
 
         if (event.finishReason) {
+          lastFinishReason = event.finishReason;
           console.log(
             `[agent:${label}] model.finish`,
             `reason=${event.finishReason}`,
@@ -192,7 +213,29 @@ async function consumeStream(
         console.log(`[agent:${label}] turn.done`, `status=${status}`);
 
         if (status !== "done") {
-          throw new Error(`Agent turn ended with status: ${status}`);
+          const duration = Date.now() - startedAt;
+
+          console.error(
+            `[agent:${label}] TURN FAILED`,
+            `duration=${duration}ms`,
+          );
+          console.error(
+            `[agent:${label}] lastFinishReason=${lastFinishReason ?? "unknown"}`,
+          );
+          console.error(
+            `[agent:${label}] toolCalls=${toolCallLog.length ? toolCallLog.join(" | ") : "none"}`,
+          );
+          console.error(
+            `[agent:${label}] accumulatedOutput(${accumulatedOutput.length} chars)=`,
+            preview(accumulatedOutput, 1500),
+          );
+          console.log(`[agent:${label}] ─────────────────────────────\n`);
+
+          throw new Error(
+            `Agent turn ended with status: ${status} (finishReason=${
+              lastFinishReason ?? "unknown"
+            })`,
+          );
         }
 
         const output = event.state.output;

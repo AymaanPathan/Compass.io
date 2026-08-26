@@ -19,3 +19,11 @@ export interface DeveloperProfile {
   contributionAreas: string[];
   funInsights: string[];
 }
+
+export interface MatchedRepository {
+  name: string;
+  url: string;
+  description: string;
+  repoType: string;
+  whyItMatches: string;
+}

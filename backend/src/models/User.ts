@@ -23,6 +23,14 @@ interface IDeveloperProfile {
   funInsights: string[];
 }
 
+interface MatchedRepository {
+  name: string;
+  url: string;
+  description: string;
+  repoType: string;
+  whyItMatches: string;
+}
+
 export interface IUser extends Document {
   githubId: string;
   username: string;
@@ -38,6 +46,14 @@ export interface IUser extends Document {
   developerProfileParseFailed?: boolean;
   developerProfileGeneratedAt?: Date;
   developerProfileSessionId?: string;
+
+  // Repo recommender
+  repoRecommendations?: MatchedRepository[];
+  repoRecommendationsRaw?: string;
+  repoRecommendationsParseFailed?: boolean;
+  repoRecommendationsGeneratedAt?: Date;
+  repoRecommendationsSessionId?: string;
+  repoRecommendationsStatus?: "idle" | "running" | "auth_required";
 }
 
 const TechConfidenceSchema = new Schema(
@@ -61,6 +77,17 @@ const DeveloperProfileSchema = new Schema(
   { _id: false },
 );
 
+const MatchedRepositorySchema = new Schema(
+  {
+    name: String,
+    url: String,
+    description: String,
+    repoType: String,
+    whyItMatches: String,
+  },
+  { _id: false },
+);
+
 const UserSchema = new Schema<IUser>({
   githubId: { type: String, required: true, unique: true },
   username: { type: String, required: true },
@@ -80,6 +107,18 @@ const UserSchema = new Schema<IUser>({
   developerProfileParseFailed: { type: Boolean },
   developerProfileGeneratedAt: { type: Date },
   developerProfileSessionId: { type: String },
+
+  // Repo recommender
+  repoRecommendations: { type: [MatchedRepositorySchema], default: undefined },
+  repoRecommendationsRaw: { type: String },
+  repoRecommendationsParseFailed: { type: Boolean },
+  repoRecommendationsGeneratedAt: { type: Date },
+  repoRecommendationsSessionId: { type: String },
+  repoRecommendationsStatus: {
+    type: String,
+    enum: ["idle", "running", "auth_required"],
+    default: "idle",
+  },
 });
 
 export default mongoose.model<IUser>("User", UserSchema);

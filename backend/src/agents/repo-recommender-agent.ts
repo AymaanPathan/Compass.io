@@ -13,7 +13,7 @@ async function createAgent() {
         model: {
           name: "nvidia-model-gpt/openai-gpt-oss-120b",
           params: {
-            max_tokens: 2000,
+            max_tokens: 4000,
           },
         },
 
@@ -31,6 +31,7 @@ IMPORTANT EXECUTION RULES:
 5. Do NOT search individual issues.
 6. Do NOT fetch issue counts, issue lists, or issue details for any repository.
 7. Do NOT use any other tools.
+7a. You only have access to search_repositories. Tools like search_code, list_commits, get_me, or issue tools are NOT available to you in this agent — do not attempt to call them. If you consider calling anything other than search_repositories, stop and proceed to the final JSON instead.
 8. After receiving usable, genuinely relevant results, select the best 4-5 repositories and immediately return the final JSON. Do not keep refining the query once you have genuinely relevant candidates.
 9. Never invent repository information. Only use information returned by GitHub.
 10. Never invent or imply a specific contribution opportunity (e.g. a specific open issue) that GitHub search did not actually provide evidence for.

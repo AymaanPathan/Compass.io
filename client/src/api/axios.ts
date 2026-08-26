@@ -1,5 +1,5 @@
 import axios from "axios";
-import type { DeveloperProfile } from "./../types";
+import type { DeveloperProfile, MatchedRepository } from "./../types";
 
 export const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
@@ -40,5 +40,16 @@ export async function fetchDeveloperProfile(force = false): Promise<{
     params: force ? { refresh: "true" } : undefined,
   });
   console.log("Fetched developer profile:", data);
+  return data;
+}
+
+export async function fetchRepoRecommendations(force = false): Promise<{
+  matchedRepositories: MatchedRepository[];
+  cached: boolean;
+  generatedAt: string | null;
+}> {
+  const { data } = await http.get("/api/oss/recommendations", {
+    params: force ? { refresh: "true" } : undefined,
+  });
   return data;
 }

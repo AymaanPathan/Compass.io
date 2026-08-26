@@ -4,6 +4,7 @@ import { useAppDispatch, useAppSelector } from "./store/storeHook";
 import { loadCurrentUser } from "./store/authSlice";
 import Landing from "./pages/Landing";
 import Analysis from "./pages/Analysis";
+import Discover from "./pages/Discover";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { status } = useAppSelector((s) => s.auth);
@@ -44,6 +45,14 @@ export default function App() {
         />
 
         <Route path="*" element={<Navigate to="/" replace />} />
+        <Route
+          path="/discover"
+          element={
+            <RequireAuth>
+              <Discover />
+            </RequireAuth>
+          }
+        />
       </Routes>
     </BrowserRouter>
   );

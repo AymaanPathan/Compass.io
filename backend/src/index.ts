@@ -6,7 +6,7 @@ import cookieParser from "cookie-parser";
 import { connectDB } from "./config/db";
 import authRoutes from "./routes/auth";
 import githubRoutes from "./routes/github";
-import ossRoutes from "./routes/oss";
+import ossRoutes from "./routes/findRepo";
 import solverRoutes from "./routes/solver";
 import issuesRoutes from "./routes/issues";
 
