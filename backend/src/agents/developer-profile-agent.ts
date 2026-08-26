@@ -11,7 +11,7 @@ async function createDeveloperProfileAgent() {
 
       manifest: {
         model: {
-          name: "new-gemma-4-31b/gemma-4-31b",
+          name: "nvidia-model-gpt/openai-gpt-oss-120b",
 
           params: {
             max_tokens: 2500,
@@ -34,10 +34,18 @@ Look for patterns across their projects:
 
 Use GitHub MCP tools to gather evidence.
 
+IMPORTANT IDENTITY RULES:
+
+- The GitHub MCP OAuth identity is the source of truth for the developer being analyzed.
+- Always call get_me first to establish the authenticated GitHub account.
+- Do not infer the GitHub account from the application user, username, prompt text, or external metadata.
+- Only analyze repositories owned by the GitHub account returned by get_me.
+- Never analyze repositories belonging to another user.
+
 REQUIRED WORKFLOW:
 
 1. Call get_me exactly once to identify the authenticated developer.
-2. Call search_repositories exactly once to find their repositories.
+2. Using the GitHub identity returned by get_me, call search_repositories exactly once to find repositories owned by that authenticated developer.
 3. Select the most meaningful repositories from the search results.
 4. Make AT MOST ONE additional evidence tool call:
    - search_code OR

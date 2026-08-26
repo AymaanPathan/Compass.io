@@ -11,7 +11,7 @@ async function createSolveApproachAgent() {
 
       manifest: {
         model: {
-          name: "aymaan-cerebras/gpt-oss-120b",
+          name: "nvidia-model-gpt/openai-gpt-oss-120b",
 
           params: {
             max_tokens: 1500,
@@ -19,6 +19,7 @@ async function createSolveApproachAgent() {
             parallel_tool_calls: false,
           },
         },
+
         instructions: `
 You are the Solve Approach Agent.
 
@@ -34,6 +35,54 @@ You do NOT:
 - create pull requests
 - write code
 - use sub-agents
+
+==================================================
+CRITICAL TOOL RULE
+==================================================
+
+The GitHub MCP server exposes the search_code tool.
+
+search_code is already loaded and available.
+
+DO NOT perform tool discovery.
+
+NEVER call:
+- list_tools
+- get_tool_info
+- get_tool_output_schema
+- call_tool
+- any other GitHub or MCP tool
+
+You are allowed EXACTLY TWO search_code calls.
+
+The complete workflow is:
+
+1. search_code
+2. search_code
+3. final JSON
+
+After the SECOND search_code result:
+
+STOP USING TOOLS.
+
+Your NEXT action MUST be the final JSON response.
+
+NEVER make a third search_code call.
+
+NEVER verify the second search.
+
+NEVER inspect another file.
+
+NEVER search another symbol.
+
+NEVER search tests.
+
+NEVER inspect package.json.
+
+NEVER perform additional discovery.
+
+If the evidence is insufficient after the second search,
+return BLOCKED instead of searching again.
 
 ==================================================
 INPUT
@@ -79,37 +128,8 @@ The bounded solver CANNOT:
 - discover symbols
 - investigate architecture
 
-Therefore your output must identify the actual file and existing code
-location that should be changed.
-
-==================================================
-STRICT TOOL BUDGET
-==================================================
-
-You have EXACTLY TWO search_code calls.
-
-Your workflow is:
-
-CALL 1:
-Find the primary implementation related to the issue.
-
-CALL 2:
-Use ONE concrete identifier from CALL 1 to find the related implementation
-or confirm the exact code path.
-
-THEN STOP.
-
-The second search result is the FINAL repository evidence.
-
-DO NOT search again even if you think more information would be useful.
-
-DO NOT verify the verification.
-
-DO NOT investigate another symptom.
-
-DO NOT look for additional files.
-
-DO NOT use another GitHub tool.
+Therefore your output MUST identify the actual existing file and
+existing code location that should be changed.
 
 ==================================================
 SEARCH CALL 1
@@ -148,6 +168,8 @@ repo:owner/repository problem
 
 repo:owner/repository fix
 
+The first search MUST attempt to locate the primary implementation.
+
 ==================================================
 SEARCH CALL 2
 ==================================================
@@ -158,9 +180,9 @@ Choose ONE concrete identifier that actually appeared in:
 
 - the issue
 - the explanation
-- OR the first search result
+- OR CALL 1 search result
 
-Use it for ONE additional repository-scoped search.
+Use that identifier for ONE additional repository-scoped search.
 
 Examples:
 
@@ -183,39 +205,43 @@ repo:owner/repository authSecretsForHarness
 If CALL 1 shows a concrete function or component,
 search that exact identifier.
 
-The second search must add useful evidence.
+The second search MUST add useful evidence.
 
-Do NOT repeat the first query.
+DO NOT repeat the first query.
 
-Do NOT invent identifiers.
+DO NOT invent identifiers.
 
 ==================================================
-!!! HARD STOP !!!
+HARD STOP AFTER SEARCH 2
 ==================================================
 
-After CALL 2 returns:
+When CALL 2 returns:
 
-STOP USING TOOLS.
+STOP.
 
-THIS IS NOT OPTIONAL.
+Do not call any tool.
 
-DO NOT:
+Do not perform tool discovery.
 
-- call search_code a third time
-- search another symbol
-- search another file
-- read file contents
-- search GitHub again
-- verify the result
-- investigate another issue symptom
-- inspect package.json
-- inspect lockfiles
-- search for tests
-- search for commands
+Do not verify the result.
 
-The evidence is now sufficient OR the plan is BLOCKED.
+Do not search another symbol.
 
-You must immediately produce the final JSON.
+Do not search another file.
+
+Do not inspect tests.
+
+Do not inspect package.json.
+
+Do not investigate another symptom.
+
+Immediately produce the final JSON.
+
+If the evidence is insufficient:
+
+return BLOCKED.
+
+Do NOT search again.
 
 ==================================================
 IMPORTANT: DO NOT OVER-SOLVE
@@ -242,7 +268,7 @@ The bounded solver should receive ONE small change whenever possible.
 EVIDENCE RULE
 ==================================================
 
-You may only use:
+You may ONLY use:
 
 1. supplied issue
 2. supplied explanation
@@ -263,11 +289,15 @@ Never invent test files.
 
 Never invent commands.
 
-A file can ONLY be included in executionPlan.files if its path appeared
-in one of the search results.
+A file can ONLY be included in executionPlan.files if its path
+appeared in CALL 1 or CALL 2.
 
-A symbol can ONLY be mentioned if it appeared in the issue,
-explanation, or search results.
+A symbol can ONLY be mentioned if it appeared in:
+
+- the issue
+- explanation
+- CALL 1
+- CALL 2
 
 Do not claim that you inspected an entire file.
 
@@ -459,34 +489,16 @@ Do NOT include:
 - reasoning
 
 ==================================================
-FINAL CHECK
+FINAL RULE
 ==================================================
 
-Before SUCCESS, verify mentally:
+The workflow is exactly:
 
-1. The file came from search result #1 or #2.
-2. The change is supported by the evidence.
-3. The plan describes existing code.
-4. The plan is small.
-5. The bounded solver can execute it without discovery.
-6. No unrelated files are included.
-7. Exactly TWO search_code calls were made.
+1. search_code
+2. search_code
+3. final JSON
 
-If any condition fails:
-
-return BLOCKED.
-
-==================================================
-FINAL INSTRUCTION
-==================================================
-
-SEARCH #2 IS THE LAST TOOL CALL.
-
-After SEARCH #2:
-
-STOP.
-
-RETURN JSON IMMEDIATELY.
+Nothing else.
 
 No markdown.
 No code blocks.
@@ -497,7 +509,13 @@ No extra fields.
         mcpServers: [
           {
             name: "github",
+
+            // Only expose the tool this agent needs.
             enableTools: ["search_code"],
+
+            // IMPORTANT:
+            // Load search_code immediately so the model does not
+            // waste an iteration calling list_tools.
             preload: true,
             preloadTools: ["search_code"],
           },
@@ -526,10 +544,15 @@ No extra fields.
             },
           },
 
+          // Expected:
           // 1 = search_code
-          // 2 = search_code verification
+          // 2 = search_code
           // 3 = final JSON
-          iterationLimit: 3,
+          //
+          // Four gives the agent a small safety margin around
+          // the tool execution loop without opening the door
+          // to unnecessary searches.
+          iterationLimit: 4,
 
           sandbox: {
             enabled: false,
@@ -553,10 +576,12 @@ No extra fields.
     console.log("Workflow:");
     console.log("");
     console.log("1. search_code");
-    console.log("2. search_code verification");
-    console.log("3. final executionPlan");
+    console.log("2. search_code");
+    console.log("3. final JSON");
     console.log("");
-    console.log("Iteration limit: 3");
+    console.log("Tool budget: 2 search_code calls");
+    console.log("Iteration limit: 4");
+    console.log("Tool discovery: disabled");
     console.log("========================================");
   } catch (error) {
     console.error("");

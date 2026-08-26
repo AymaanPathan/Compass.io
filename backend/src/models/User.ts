@@ -31,6 +31,7 @@ export interface IUser extends Document {
   email?: string;
   accessToken: string;
   createdAt: Date;
+  developerProfileStatus: "idle" | "running" | "auth_required";
 
   developerProfile?: IDeveloperProfile;
   developerProfileRaw?: string;
@@ -68,6 +69,11 @@ const UserSchema = new Schema<IUser>({
   email: { type: String },
   accessToken: { type: String, required: true },
   createdAt: { type: Date, default: Date.now },
+  developerProfileStatus: {
+    type: String,
+    enum: ["idle", "running", "auth_required"],
+    default: "idle",
+  },
 
   developerProfile: { type: DeveloperProfileSchema, default: undefined },
   developerProfileRaw: { type: String },
