@@ -18,6 +18,13 @@ import type { RootState } from "../store/store";
  *
  * Tailwind: this file assumes Tailwind v4 (`@import "tailwindcss";`), no
  * config changes needed — every color/utility used below ships in core.
+ *
+ * Theme note: primary surface stays black; buttons and small accent
+ * elements (badges, dots, avatar rings, dividers) now use a dark-green
+ * palette (#0f3d2e / #16523d / #22c37a for highlights). A few gentle
+ * animations were added — a slow float on the hero cards, a soft pulse
+ * on the "live" dot, and bubbly hover/press motion on buttons — kept
+ * subtle on purpose.
  */
 
 const FONT_DISPLAY = "'Fraunces', ui-serif, Georgia, serif";
@@ -34,7 +41,7 @@ const GITHUB_AUTH_URL = `${
 
 const TAG_STYLES: Record<string, string> = {
   "good first issue":
-    "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+    "bg-emerald-900/30 text-emerald-400 border-emerald-700/40",
   bug: "bg-rose-500/10 text-rose-400 border-rose-500/20",
   enhancement: "bg-sky-500/10 text-sky-400 border-sky-500/20",
   docs: "bg-violet-500/10 text-violet-400 border-violet-500/20",
@@ -192,13 +199,52 @@ function Landing() {
   if (status === "loading" || status === "idle") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-black">
-        <div className="h-6 w-6 rounded-full border-2 border-neutral-800 border-t-white animate-spin" />
+        <div className="h-6 w-6 rounded-full border-2 border-neutral-800 border-t-emerald-500 animate-spin" />
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-black text-white relative">
+      {/* local keyframes for the subtle floating / pulse / bubble motion */}
+      <style>{`
+        @keyframes floatY {
+          0%, 100% { transform: translateY(0) rotate(var(--tilt, 0deg)); }
+          50% { transform: translateY(-10px) rotate(var(--tilt, 0deg)); }
+        }
+        @keyframes softPulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.55; transform: scale(1.35); }
+        }
+        @keyframes glowPulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 122, 0.0); }
+          50% { box-shadow: 0 0 22px 2px rgba(34, 197, 122, 0.18); }
+        }
+        .animate-float {
+          animation: floatY 6s ease-in-out infinite;
+        }
+        .animate-float-delayed {
+          animation: floatY 6.5s ease-in-out infinite;
+          animation-delay: 0.6s;
+        }
+        .animate-soft-pulse {
+          animation: softPulse 2.2s ease-in-out infinite;
+        }
+        .animate-glow {
+          animation: glowPulse 3.2s ease-in-out infinite;
+        }
+        .bubble-btn {
+          transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1),
+            background-color 0.2s ease, box-shadow 0.25s ease;
+        }
+        .bubble-btn:hover {
+          transform: translateY(-2px) scale(1.035);
+        }
+        .bubble-btn:active {
+          transform: translateY(0) scale(0.97);
+        }
+      `}</style>
+
       {/* ambient starfield + glow, fixed behind everything */}
       <div
         className="pointer-events-none fixed inset-0 opacity-[0.35]"
@@ -208,7 +254,7 @@ function Landing() {
           backgroundSize: "44px 44px",
         }}
       />
-      <div className="pointer-events-none fixed -top-40 -left-40 h-[520px] w-[520px] rounded-full bg-white/[0.06] blur-[120px]" />
+      <div className="pointer-events-none fixed -top-40 -left-40 h-[520px] w-[520px] rounded-full bg-emerald-900/[0.12] blur-[120px]" />
 
       <div className="relative">
         {/* header */}
@@ -219,24 +265,27 @@ function Landing() {
               className="text-xs tracking-[0.2em] uppercase text-white"
               style={{ fontFamily: FONT_MONO }}
             >
-              Compass<span className="text-neutral-600">.io</span>
+              Compass<span className="text-neutral-500">.io</span>
             </span>
           </div>
 
           <nav
-            className="hidden md:flex items-center gap-8 text-[13px] text-neutral-400"
+            className="hidden md:flex items-center gap-8 text-[13px] text-neutral-300"
             style={{ fontFamily: FONT_MONO }}
           >
             <a
               href="#how-it-works"
-              className="hover:text-white transition-colors"
+              className="hover:text-emerald-400 transition-colors"
             >
               How it works
             </a>
-            <a href="#board" className="hover:text-white transition-colors">
+            <a
+              href="#board"
+              className="hover:text-emerald-400 transition-colors"
+            >
               The board
             </a>
-            <a href="#" className="hover:text-white transition-colors">
+            <a href="#" className="hover:text-emerald-400 transition-colors">
               Docs
             </a>
           </nav>
@@ -244,14 +293,14 @@ function Landing() {
           <div className="flex items-center gap-5">
             <button
               onClick={handleConnectGithub}
-              className="hidden sm:block text-[13px] text-neutral-400 hover:text-white transition-colors"
+              className="hidden sm:block text-[13px] text-neutral-300 hover:text-white transition-colors"
               style={{ fontFamily: FONT_MONO }}
             >
               Log in
             </button>
             <button
               onClick={handleConnectGithub}
-              className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-[13px] font-medium text-black hover:bg-neutral-200 transition-colors"
+              className="bubble-btn inline-flex items-center gap-2 rounded-full bg-[#123524] px-4 py-2 text-[13px] font-medium text-white shadow-lg shadow-emerald-950/40 hover:bg-[#17472f] transition-colors"
             >
               <GithubGlyph />
               Connect GitHub
@@ -265,11 +314,13 @@ function Landing() {
             {/* left: copy */}
             <div>
               <div
-                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 mb-6"
+                className="inline-flex items-center gap-2 rounded-full border border-emerald-800/40 bg-emerald-950/30 px-3 py-1 mb-6"
                 style={{ fontFamily: FONT_MONO }}
               >
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                <span className="text-[11px] tracking-[0.16em] uppercase text-neutral-400">
+                <span className="relative h-1.5 w-1.5 rounded-full bg-emerald-400">
+                  <span className="absolute inset-0 rounded-full bg-emerald-400 animate-soft-pulse" />
+                </span>
+                <span className="text-[11px] tracking-[0.16em] uppercase text-neutral-300">
                   Repo matching · live
                 </span>
               </div>
@@ -280,10 +331,12 @@ function Landing() {
               >
                 Plot a course to
                 <br />
-                <em className="not-italic italic">your first commit.</em>
+                <em className="not-italic italic text-emerald-400">
+                  your first commit.
+                </em>
               </h1>
 
-              <p className="mt-6 max-w-md text-[15px] leading-relaxed text-neutral-400">
+              <p className="mt-6 max-w-md text-[15px] leading-relaxed text-neutral-300">
                 Compass reads your GitHub stack, matches you to real open issues
                 you're already equipped to solve, and drafts the fix itself —
                 you approve the PR before anything ships.
@@ -292,14 +345,14 @@ function Landing() {
               <div className="mt-10 flex items-center gap-4">
                 <button
                   onClick={handleFindFirstContribution}
-                  className="inline-flex items-center gap-2.5 rounded-lg bg-white px-6 py-3 text-sm font-medium text-black hover:bg-neutral-200 transition-colors"
+                  className="bubble-btn animate-glow inline-flex items-center gap-2.5 rounded-lg bg-[#123524] px-6 py-3 text-sm font-medium text-white hover:bg-[#17472f] transition-colors"
                 >
                   <GithubGlyph />
                   Find my first contribution
                 </button>
               </div>
               <p
-                className="mt-3 text-[11px] tracking-wide text-neutral-600"
+                className="mt-3 text-[11px] tracking-wide text-neutral-500"
                 style={{ fontFamily: FONT_MONO }}
               >
                 connects with github · read-only access
@@ -308,13 +361,16 @@ function Landing() {
 
             {/* right: floating repo + issue cards */}
             <div className="relative h-[420px] hidden lg:block">
-              <div className="absolute top-0 right-4 w-[340px] rotate-[5deg] rounded-2xl border border-white/10 bg-[#0d0d0f] p-5 shadow-2xl shadow-black/60">
+              <div
+                className="animate-float absolute top-0 right-4 w-[340px] rounded-2xl border border-emerald-900/40 bg-[#0d0f0d] p-5 shadow-2xl shadow-black/60"
+                style={{ ["--tilt" as string]: "5deg" }}
+              >
                 <div className="flex items-center justify-between">
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-400">
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-700/40 bg-emerald-900/30 px-2.5 py-1 text-[11px] font-medium text-emerald-400">
                     94% match
                   </span>
                   <span
-                    className="text-[11px] text-neutral-500"
+                    className="text-[11px] text-neutral-400"
                     style={{ fontFamily: FONT_MONO }}
                   >
                     updated 2h ago
@@ -323,14 +379,14 @@ function Landing() {
                 <h3 className="mt-3 text-[15px] font-medium text-white">
                   facebook / react
                 </h3>
-                <p className="mt-1.5 text-[13px] leading-relaxed text-neutral-500">
+                <p className="mt-1.5 text-[13px] leading-relaxed text-neutral-400">
                   Your TypeScript + hooks history lines up with 12 open issues
                   here.
                 </p>
                 <div className="mt-4 flex items-center justify-between">
                   <AvatarStack initials={["AI"]} />
                   <div
-                    className="flex items-center gap-3 text-[11px] text-neutral-500"
+                    className="flex items-center gap-3 text-[11px] text-neutral-400"
                     style={{ fontFamily: FONT_MONO }}
                   >
                     <span className="inline-flex items-center gap-1">
@@ -343,13 +399,16 @@ function Landing() {
                 </div>
               </div>
 
-              <div className="absolute top-[168px] right-16 w-[340px] rotate-[-3deg] rounded-2xl border border-white/10 bg-[#0d0d0f] p-5 shadow-2xl shadow-black/60">
+              <div
+                className="animate-float-delayed absolute top-[168px] right-16 w-[340px] rounded-2xl border border-emerald-900/40 bg-[#0d0f0d] p-5 shadow-2xl shadow-black/60"
+                style={{ ["--tilt" as string]: "-3deg" }}
+              >
                 <div className="flex items-center justify-between">
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-400">
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-700/40 bg-emerald-900/30 px-2.5 py-1 text-[11px] font-medium text-emerald-400">
                     good first issue
                   </span>
                   <span
-                    className="text-[11px] text-neutral-500"
+                    className="text-[11px] text-neutral-400"
                     style={{ fontFamily: FONT_MONO }}
                   >
                     #4821
@@ -358,19 +417,19 @@ function Landing() {
                 <h3 className="mt-3 text-[15px] font-medium text-white">
                   Add WebSocket reconnect fallback
                 </h3>
-                <p className="mt-1.5 text-[13px] leading-relaxed text-neutral-500">
+                <p className="mt-1.5 text-[13px] leading-relaxed text-neutral-400">
                   Agent has a proposed fix, grounded in the actual client
                   source.
                 </p>
                 <div className="mt-4">
                   <div className="h-1 w-full rounded-full bg-white/[0.06]">
-                    <div className="h-1 w-[70%] rounded-full bg-emerald-400" />
+                    <div className="h-1 w-[70%] rounded-full bg-emerald-500" />
                   </div>
                 </div>
                 <div className="mt-3 flex items-center justify-between">
                   <AvatarStack initials={["AI", "MK"]} />
                   <div
-                    className="flex items-center gap-3 text-[11px] text-neutral-500"
+                    className="flex items-center gap-3 text-[11px] text-neutral-400"
                     style={{ fontFamily: FONT_MONO }}
                   >
                     <span className="inline-flex items-center gap-1">
@@ -390,7 +449,7 @@ function Landing() {
         <section id="board" className="mx-auto w-full max-w-6xl px-6 pb-28">
           <div className="mb-8 max-w-xl">
             <p
-              className="text-[11px] tracking-[0.2em] uppercase text-neutral-500 mb-3"
+              className="text-[11px] tracking-[0.2em] uppercase text-emerald-500 mb-3"
               style={{ fontFamily: FONT_MONO }}
             >
               The board
@@ -403,7 +462,7 @@ function Landing() {
             </h2>
           </div>
 
-          <div className="rounded-2xl border border-white/10 bg-[#0a0a0b] overflow-hidden shadow-2xl shadow-black/60">
+          <div className="rounded-2xl border border-emerald-900/30 bg-[#0a0a0b] overflow-hidden shadow-2xl shadow-black/60">
             {/* window chrome */}
             <div className="flex items-center gap-3 border-b border-white/[0.06] px-4 py-3">
               <div className="flex items-center gap-1.5">
@@ -413,13 +472,13 @@ function Landing() {
               </div>
               <div className="flex-1 flex justify-center">
                 <span
-                  className="rounded-md bg-white/[0.04] px-3 py-1 text-[11px] text-neutral-500"
+                  className="rounded-md bg-emerald-950/40 px-3 py-1 text-[11px] text-neutral-400"
                   style={{ fontFamily: FONT_MONO }}
                 >
                   compass.io/board
                 </span>
               </div>
-              <span className="text-neutral-600 text-lg leading-none w-4 text-right">
+              <span className="text-neutral-500 text-lg leading-none w-4 text-right">
                 +
               </span>
             </div>
@@ -435,7 +494,7 @@ function Landing() {
                     </span>
                   </div>
                   <nav
-                    className="space-y-1 text-[13px] text-neutral-400"
+                    className="space-y-1 text-[13px] text-neutral-300"
                     style={{ fontFamily: FONT_MONO }}
                   >
                     <SidebarItem icon={<IconGrid />} label="Board" active />
@@ -445,13 +504,13 @@ function Landing() {
                   </nav>
                 </div>
                 <div className="flex items-center gap-2 px-2">
-                  <span className="h-7 w-7 rounded-full bg-white/[0.08] flex items-center justify-center text-[11px] text-neutral-300">
+                  <span className="h-7 w-7 rounded-full bg-emerald-900/40 flex items-center justify-center text-[11px] text-emerald-300">
                     AC
                   </span>
                   <div className="leading-tight">
                     <p className="text-[12px] text-white">Alex Chen</p>
                     <p
-                      className="text-[10px] text-neutral-500"
+                      className="text-[10px] text-neutral-400"
                       style={{ fontFamily: FONT_MONO }}
                     >
                       Contributor
@@ -472,11 +531,11 @@ function Landing() {
                         <span
                           className={`h-1.5 w-1.5 rounded-full ${col.dot}`}
                         />
-                        <span className="text-[12px] font-medium text-neutral-300">
+                        <span className="text-[12px] font-medium text-neutral-200">
                           {col.label}
                         </span>
                         <span
-                          className="ml-auto text-[11px] text-neutral-600"
+                          className="ml-auto text-[11px] text-neutral-500"
                           style={{ fontFamily: FONT_MONO }}
                         >
                           {col.count}
@@ -486,7 +545,7 @@ function Landing() {
                         {col.cards.map((card) => (
                           <div
                             key={card.refId + card.title}
-                            className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3 hover:bg-white/[0.04] transition-colors"
+                            className="bubble-btn rounded-lg border border-white/[0.06] bg-white/[0.02] p-3 hover:bg-emerald-950/20 hover:border-emerald-800/40 transition-colors"
                           >
                             <div className="flex items-center justify-between gap-2">
                               <span
@@ -496,7 +555,7 @@ function Landing() {
                               </span>
                             </div>
                             <p
-                              className="mt-2 text-[10px] text-neutral-600"
+                              className="mt-2 text-[10px] text-neutral-500"
                               style={{ fontFamily: FONT_MONO }}
                             >
                               {card.refId}
@@ -504,7 +563,7 @@ function Landing() {
                             <h4 className="mt-1 text-[13px] leading-snug text-white">
                               {card.title}
                             </h4>
-                            <p className="mt-1.5 text-[11px] leading-relaxed text-neutral-500">
+                            <p className="mt-1.5 text-[11px] leading-relaxed text-neutral-400">
                               {card.desc}
                             </p>
                             <div className="mt-3 flex items-center justify-between">
@@ -515,7 +574,7 @@ function Landing() {
                                 </span>
                               ) : card.stat ? (
                                 <span
-                                  className="text-[10px] text-neutral-500"
+                                  className="text-[10px] text-neutral-400"
                                   style={{ fontFamily: FONT_MONO }}
                                 >
                                   {card.stat}
@@ -557,7 +616,7 @@ function Landing() {
         </div>
 
         <footer
-          className="mx-auto w-full max-w-6xl px-6 py-8 flex items-center justify-between text-[11px] text-neutral-600 border-t border-white/[0.06]"
+          className="mx-auto w-full max-w-6xl px-6 py-8 flex items-center justify-between text-[11px] text-neutral-500 border-t border-white/[0.06]"
           style={{ fontFamily: FONT_MONO }}
         >
           <span>compass.io</span>
@@ -584,7 +643,7 @@ function Waypoint({
   return (
     <div className="bg-black px-1 py-10 sm:py-12">
       <p
-        className="text-[11px] tracking-[0.16em] text-neutral-500"
+        className="text-[11px] tracking-[0.16em] text-emerald-500"
         style={{ fontFamily: FONT_MONO }}
       >
         {bearing}
@@ -595,7 +654,7 @@ function Waypoint({
       >
         {title}
       </h3>
-      <p className="mt-2 text-[13px] leading-relaxed max-w-xs text-neutral-500">
+      <p className="mt-2 text-[13px] leading-relaxed max-w-xs text-neutral-400">
         {body}
       </p>
     </div>
@@ -613,8 +672,8 @@ function SidebarItem({
 }) {
   return (
     <div
-      className={`flex items-center gap-2.5 rounded-md px-2 py-1.5 ${
-        active ? "bg-white/[0.06] text-white" : ""
+      className={`flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors ${
+        active ? "bg-emerald-900/30 text-emerald-300" : ""
       }`}
     >
       {icon}
@@ -636,7 +695,7 @@ function AvatarStack({
       {initials.map((label, i) => (
         <span
           key={label + i}
-          className={`${dim} rounded-full bg-white/[0.08] ring-2 ring-[#0d0d0f] flex items-center justify-center text-neutral-300 font-medium`}
+          className={`${dim} rounded-full bg-emerald-900/40 ring-2 ring-[#0d0d0f] flex items-center justify-center text-emerald-300 font-medium`}
         >
           {label}
         </span>
@@ -657,12 +716,12 @@ function MarkGlyph() {
         cx="8"
         cy="8"
         r="7"
-        stroke="white"
-        strokeOpacity="0.8"
+        stroke="#22c37a"
+        strokeOpacity="0.9"
         strokeWidth="1"
       />
-      <line x1="8" y1="1" x2="8" y2="3.4" stroke="white" strokeWidth="1" />
-      <circle cx="8" cy="8" r="1" fill="white" />
+      <line x1="8" y1="1" x2="8" y2="3.4" stroke="#22c37a" strokeWidth="1" />
+      <circle cx="8" cy="8" r="1" fill="#22c37a" />
     </svg>
   );
 }
