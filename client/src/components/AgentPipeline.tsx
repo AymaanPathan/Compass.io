@@ -1,82 +1,113 @@
-import { useNavigate } from "react-router-dom";
+const FONT_MONO = "'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace";
 
 export type PipelineNodeStatus =
   | "idle"
   | "running"
   | "succeeded"
-  | "blocked"
   | "failed"
-  | "locked";
+  | "auth_required";
 
-export interface PipelineNode {
+export type PipelineNode = {
   key: string;
   label: string;
   agentName: string;
   status: PipelineNodeStatus;
-  to?: string;
-}
-
-const DOT_STYLES: Record<PipelineNodeStatus, string> = {
-  idle: "bg-neutral-700",
-  locked: "bg-neutral-800",
-  running: "bg-run agent-pulse",
-  succeeded: "bg-ok",
-  blocked: "bg-blocked",
-  failed: "bg-fail",
 };
 
-const LINE_STYLES: Record<PipelineNodeStatus, string> = {
-  idle: "bg-neutral-800",
-  locked: "bg-neutral-900",
-  running: "bg-gradient-to-r from-ok to-run",
-  succeeded: "bg-ok/60",
-  blocked: "bg-blocked/60",
-  failed: "bg-fail/60",
+const STATUS_STYLES: Record<
+  PipelineNodeStatus,
+  { dot: string; ring: string; text: string; label: string }
+> = {
+  idle: {
+    dot: "bg-neutral-600",
+    ring: "border-white/[0.08]",
+    text: "text-neutral-500",
+    label: "queued",
+  },
+  running: {
+    dot: "bg-sky-400 animate-node-pulse",
+    ring: "border-sky-700/40 bg-sky-500/[0.04]",
+    text: "text-sky-400",
+    label: "running",
+  },
+  succeeded: {
+    dot: "bg-emerald-400",
+    ring: "border-emerald-700/40 bg-emerald-900/[0.12]",
+    text: "text-emerald-400",
+    label: "done",
+  },
+  failed: {
+    dot: "bg-rose-400",
+    ring: "border-rose-700/40 bg-rose-500/[0.04]",
+    text: "text-rose-400",
+    label: "failed",
+  },
+  auth_required: {
+    dot: "bg-amber-400",
+    ring: "border-amber-700/40 bg-amber-500/[0.04]",
+    text: "text-amber-400",
+    label: "needs auth",
+  },
 };
 
-export default function AgentPipeline({
+function AgentPipeline({
   nodes,
   activeKey,
 }: {
   nodes: PipelineNode[];
-  activeKey?: string;
+  activeKey: string;
 }) {
-  const navigate = useNavigate();
-
   return (
-    <div className="flex items-center overflow-x-auto thin-scroll pb-2">
-      {nodes.map((node, i) => (
-        <div key={node.key} className="flex items-center flex-shrink-0">
-          <button
-            disabled={!node.to || node.status === "locked"}
-            onClick={() => node.to && navigate(node.to)}
-            className={`group flex flex-col items-start gap-2 rounded-lg border px-4 py-3 text-left transition-colors ${
-              node.key === activeKey
-                ? "border-white/25 bg-white/[0.06]"
-                : "border-white/[0.06] hover:border-white/15"
-            } ${node.to && node.status !== "locked" ? "cursor-pointer" : "cursor-default"}`}
-          >
-            <div className="flex items-center gap-2">
-              <span
-                className={`h-2 w-2 rounded-full ${DOT_STYLES[node.status]}`}
-              />
-              <span className="text-[13px] text-white">{node.label}</span>
-            </div>
-            <span
-              className="text-[10px] tracking-wide text-neutral-600"
-              style={{ fontFamily: "var(--font-mono)" }}
-            >
-              {node.agentName}
-            </span>
-          </button>
+    <div className="mb-10">
+      <style>{`
+        @keyframes nodePulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.45; transform: scale(1.4); }
+        }
+        .animate-node-pulse { animation: nodePulse 1.8s ease-in-out infinite; }
+      `}</style>
 
-          {i < nodes.length - 1 && (
-            <div
-              className={`mx-1 h-px w-8 flex-shrink-0 ${LINE_STYLES[node.status]}`}
-            />
-          )}
-        </div>
-      ))}
+      <div className="flex items-stretch">
+        {nodes.map((node, i) => {
+          const s = STATUS_STYLES[node.status];
+          const isActive = node.key === activeKey;
+
+          return (
+            <div key={node.key} className="flex flex-1 items-center">
+              <div
+                className={`flex-1 rounded-lg border px-4 py-3 transition-all duration-300 ${s.ring} ${
+                  isActive ? "shadow-lg shadow-black/40" : "opacity-70"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
+                  <span
+                    className={`text-[10px] uppercase tracking-[0.14em] ${s.text}`}
+                    style={{ fontFamily: FONT_MONO }}
+                  >
+                    {s.label}
+                  </span>
+                </div>
+                <p className="mt-1.5 text-[13px] font-medium text-white">
+                  {node.label}
+                </p>
+                <p
+                  className="text-[10px] text-neutral-500"
+                  style={{ fontFamily: FONT_MONO }}
+                >
+                  {node.agentName}
+                </p>
+              </div>
+
+              {i < nodes.length - 1 && (
+                <div className="mx-2 h-px w-6 shrink-0 bg-white/[0.08] sm:w-10" />
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
+
+export default AgentPipeline;

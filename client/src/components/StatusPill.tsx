@@ -1,36 +1,54 @@
-const STYLES: Record<string, string> = {
-  idle: "text-neutral-500 border-neutral-800",
-  running: "text-run border-run/40 bg-run/10",
-  waiting: "text-run border-run/40 bg-run/10",
-  succeeded: "text-ok border-ok/40 bg-ok/10",
-  done: "text-ok border-ok/40 bg-ok/10",
-  already_satisfied: "text-ok border-ok/40 bg-ok/10",
-  success: "text-ok border-ok/40 bg-ok/10",
-  empty: "text-neutral-500 border-neutral-800",
-  blocked: "text-blocked border-blocked/40 bg-blocked/10",
-  failed: "text-fail border-fail/40 bg-fail/10",
-  error: "text-fail border-fail/40 bg-fail/10",
+const FONT_MONO = "'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace";
+
+type Status = "idle" | "running" | "succeeded" | "failed" | "auth_required";
+
+const STYLES: Record<
+  Status,
+  { dot: string; text: string; bg: string; label: string }
+> = {
+  idle: {
+    dot: "bg-neutral-600",
+    text: "text-neutral-400",
+    bg: "border-white/[0.08]",
+    label: "idle",
+  },
+  running: {
+    dot: "bg-sky-400 animate-pulse",
+    text: "text-sky-400",
+    bg: "border-sky-700/40 bg-sky-500/[0.05]",
+    label: "running",
+  },
+  succeeded: {
+    dot: "bg-emerald-400",
+    text: "text-emerald-400",
+    bg: "border-emerald-700/40 bg-emerald-900/[0.15]",
+    label: "complete",
+  },
+  failed: {
+    dot: "bg-rose-400",
+    text: "text-rose-400",
+    bg: "border-rose-700/40 bg-rose-500/[0.05]",
+    label: "failed",
+  },
+  auth_required: {
+    dot: "bg-amber-400",
+    text: "text-amber-400",
+    bg: "border-amber-700/40 bg-amber-500/[0.05]",
+    label: "needs auth",
+  },
 };
 
-export default function StatusPill({
-  status,
-  label,
-}: {
-  status: string;
-  label?: string;
-}) {
-  const cls = STYLES[status] ?? STYLES.idle;
-  const isLive = status === "running" || status === "waiting";
-
+function StatusPill({ status }: { status: Status }) {
+  const s = STYLES[status] ?? STYLES.idle;
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] ${cls}`}
-      style={{ fontFamily: "var(--font-mono)" }}
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${s.bg} ${s.text}`}
+      style={{ fontFamily: FONT_MONO }}
     >
-      {isLive && (
-        <span className="h-1.5 w-1.5 rounded-full bg-current agent-pulse" />
-      )}
-      {label ?? status.replace(/_/g, " ")}
+      <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
+      {s.label}
     </span>
   );
 }
+
+export default StatusPill;
