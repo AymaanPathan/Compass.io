@@ -313,18 +313,6 @@ function Landing() {
           <div className="grid lg:grid-cols-2 gap-16 items-center pt-20 pb-24 lg:pt-28 lg:pb-32">
             {/* left: copy */}
             <div>
-              <div
-                className="inline-flex items-center gap-2 rounded-full border border-emerald-800/40 bg-emerald-950/30 px-3 py-1 mb-6"
-                style={{ fontFamily: FONT_MONO }}
-              >
-                <span className="relative h-1.5 w-1.5 rounded-full bg-emerald-400">
-                  <span className="absolute inset-0 rounded-full bg-emerald-400 animate-soft-pulse" />
-                </span>
-                <span className="text-[11px] tracking-[0.16em] uppercase text-neutral-300">
-                  Repo matching · live
-                </span>
-              </div>
-
               <h1
                 className="text-[2.5rem] leading-[1.1] sm:text-[3.5rem] sm:leading-[1.06] font-medium tracking-tight text-white"
                 style={{ fontFamily: FONT_DISPLAY }}
