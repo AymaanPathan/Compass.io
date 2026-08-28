@@ -1,4 +1,4 @@
-import { agentClient } from "./agentClient";
+import { trueforge } from "./agentClient";
 
 interface RunAgentOptions {
   agentName: string;
@@ -78,7 +78,7 @@ async function consumeStream(
   sessionId: string,
   label: string,
   startedAt: number,
-  stream: Awaited<ReturnType<typeof agentClient.sessions.createTurnStream>>,
+  stream: Awaited<ReturnType<typeof trueforge.sessions.createTurnStream>>,
 ): Promise<AgentRunResult> {
   let eventCount = 0;
 
@@ -288,7 +288,7 @@ export async function runAgent({
   try {
     console.log(`[agent:${label}] creating session...`);
 
-    const { data: session } = await agentClient.sessions.create({
+    const { data: session } = await trueforge.sessions.create({
       agent: {
         name: agentName,
       },
@@ -297,7 +297,7 @@ export async function runAgent({
     console.log(`[agent:${label}] session created: ${session.id}`);
     console.log(`[agent:${label}] creating turn...`);
 
-    const stream = await agentClient.sessions.createTurnStream(session.id, {
+    const stream = await trueforge.sessions.createTurnStream(session.id, {
       input: [
         {
           type: "user.message",
@@ -339,7 +339,7 @@ export async function resumeAgent({
   console.log(`[agent:${label}] resuming session=${sessionId}`);
 
   try {
-    const stream = await agentClient.sessions.createTurnStream(sessionId, {});
+    const stream = await trueforge.sessions.createTurnStream(sessionId, {});
 
     console.log(`[agent:${label}] resume stream opened`);
 

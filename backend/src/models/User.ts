@@ -31,6 +31,20 @@ interface MatchedRepository {
   whyItMatches: string;
 }
 
+/**
+ * Persisted lock state for a streamed agent run. "failed" is set whenever a
+ * stream ends in error, so a page refresh mid-run shows the real outcome
+ * instead of getting stuck on "running" or silently resetting to "idle".
+ */
+type AgentRunLockStatus = "idle" | "running" | "auth_required" | "failed";
+
+const AGENT_RUN_STATUSES: AgentRunLockStatus[] = [
+  "idle",
+  "running",
+  "auth_required",
+  "failed",
+];
+
 export interface IUser extends Document {
   githubId: string;
   username: string;
@@ -39,13 +53,14 @@ export interface IUser extends Document {
   email?: string;
   accessToken: string;
   createdAt: Date;
-  developerProfileStatus: "idle" | "running" | "auth_required";
 
+  developerProfileStatus: AgentRunLockStatus;
   developerProfile?: IDeveloperProfile;
   developerProfileRaw?: string;
   developerProfileParseFailed?: boolean;
   developerProfileGeneratedAt?: Date;
   developerProfileSessionId?: string;
+  developerProfileLastError?: string;
 
   // Repo recommender
   repoRecommendations?: MatchedRepository[];
@@ -53,7 +68,8 @@ export interface IUser extends Document {
   repoRecommendationsParseFailed?: boolean;
   repoRecommendationsGeneratedAt?: Date;
   repoRecommendationsSessionId?: string;
-  repoRecommendationsStatus?: "idle" | "running" | "auth_required";
+  repoRecommendationsStatus?: AgentRunLockStatus;
+  repoRecommendationsLastError?: string;
 }
 
 const TechConfidenceSchema = new Schema(
@@ -96,17 +112,18 @@ const UserSchema = new Schema<IUser>({
   email: { type: String },
   accessToken: { type: String, required: true },
   createdAt: { type: Date, default: Date.now },
+
   developerProfileStatus: {
     type: String,
-    enum: ["idle", "running", "auth_required"],
+    enum: AGENT_RUN_STATUSES,
     default: "idle",
   },
-
   developerProfile: { type: DeveloperProfileSchema, default: undefined },
   developerProfileRaw: { type: String },
   developerProfileParseFailed: { type: Boolean },
   developerProfileGeneratedAt: { type: Date },
   developerProfileSessionId: { type: String },
+  developerProfileLastError: { type: String },
 
   // Repo recommender
   repoRecommendations: { type: [MatchedRepositorySchema], default: undefined },
@@ -116,9 +133,10 @@ const UserSchema = new Schema<IUser>({
   repoRecommendationsSessionId: { type: String },
   repoRecommendationsStatus: {
     type: String,
-    enum: ["idle", "running", "auth_required"],
+    enum: AGENT_RUN_STATUSES,
     default: "idle",
   },
+  repoRecommendationsLastError: { type: String },
 });
 
 export default mongoose.model<IUser>("User", UserSchema);

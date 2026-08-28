@@ -1,61 +1,193 @@
-import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
-import { fetchDeveloperProfile } from "../api/axios";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import {
+  createSlice,
+  createAsyncThunk,
+  type PayloadAction,
+} from "@reduxjs/toolkit";
+import {
+  consumeAgentStream,
+  type AgentActivityEvent,
+  type AuthUrl,
+} from "./agentStream";
+import { parsePartialJson } from "../utils/partialJson";
 import type { DeveloperProfile } from "../types";
 
-interface ProfileState {
+const API_ROOT = (
+  import.meta.env.VITE_API_URL ?? "http://localhost:5000"
+).replace(/\/+$/, "");
+const API_BASE = `${API_ROOT}/api/github`;
+
+export type AgentRunStatus =
+  | "idle"
+  | "connecting"
+  | "running"
+  | "auth_required"
+  | "succeeded"
+  | "failed";
+
+interface DevProfileState {
   data: DeveloperProfile | null;
-  parseFailed: boolean;
-  raw: string | null;
-  status: "idle" | "running" | "succeeded" | "failed";
+  streamingProfile: Partial<DeveloperProfile> | null;
+  activity: AgentActivityEvent[];
+  status: AgentRunStatus;
   error: string | null;
+  authUrls: AuthUrl[];
   generatedAt: string | null;
   cached: boolean;
+  rawBuffer: string;
 }
 
-const initialState: ProfileState = {
+const initialState: DevProfileState = {
   data: null,
-  parseFailed: false,
-  raw: null,
+  streamingProfile: null,
+  activity: [],
   status: "idle",
   error: null,
+  authUrls: [],
   generatedAt: null,
   cached: false,
+  rawBuffer: "",
 };
 
-export const runProfileAgent = createAsyncThunk(
-  "profile/run",
-  async (force: boolean = false) => {
-    return await fetchDeveloperProfile(force);
-  },
-);
+async function runStream(
+  url: string,
+  dispatch: (action: any) => void,
+): Promise<
+  | { profile: DeveloperProfile; raw: string }
+  | { authUrls: AuthUrl[] }
+  | { error: string }
+> {
+  const result = await consumeAgentStream<DeveloperProfile>(url, {
+    onPhase: () => dispatch(devProfileSlice.actions.phaseChanged("running")),
+    onActivity: (event) =>
+      dispatch(devProfileSlice.actions.activityAdded(event)),
+    onTextDelta: (delta) =>
+      dispatch(devProfileSlice.actions.textDeltaReceived(delta)),
+    onAuthRequired: (authUrls) =>
+      dispatch(devProfileSlice.actions.authRequired(authUrls)),
+  });
 
-const profileSlice = createSlice({
-  name: "profile",
+  if (result.kind === "error") return { error: result.message };
+  if (result.kind === "auth_required") return { authUrls: result.authUrls };
+  return { profile: result.data, raw: result.raw };
+}
+
+async function commitProfile(payload: {
+  profile: DeveloperProfile;
+  raw: string;
+}) {
+  await fetch(`${API_BASE}/profile/commit`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Authorization: `Bearer ${localStorage.getItem("accessToken")}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export const runProfileStream = createAsyncThunk<
+  | { profile: DeveloperProfile; raw: string; generatedAt: string }
+  | { authUrls: AuthUrl[] }
+  | null,
+  void,
+  { rejectValue: string }
+>("devProfile/stream", async (_, { dispatch, rejectWithValue }) => {
+  dispatch(devProfileSlice.actions.streamReset());
+
+  const result = await runStream(`${API_BASE}/profile/stream`, dispatch);
+  if ("error" in result) return rejectWithValue(result.error);
+  if ("authUrls" in result) return result;
+
+  await commitProfile(result);
+  return { ...result, generatedAt: new Date().toISOString() };
+});
+
+export const resumeProfileStream = createAsyncThunk<
+  { profile: DeveloperProfile; raw: string; generatedAt: string } | null,
+  void,
+  { rejectValue: string }
+>("devProfile/resumeStream", async (_, { dispatch, rejectWithValue }) => {
+  const result = await runStream(`${API_BASE}/profile/stream/resume`, dispatch);
+  if ("error" in result) return rejectWithValue(result.error);
+  if ("authUrls" in result)
+    return rejectWithValue("Still waiting on GitHub authorization");
+
+  await commitProfile(result);
+  return { ...result, generatedAt: new Date().toISOString() };
+});
+
+const devProfileSlice = createSlice({
+  name: "devProfile",
   initialState,
   reducers: {
-    resetProfile: () => initialState,
+    phaseChanged(state, action: PayloadAction<AgentRunStatus>) {
+      state.status = action.payload;
+    },
+    activityAdded(state, action: PayloadAction<AgentActivityEvent>) {
+      state.activity.push(action.payload);
+    },
+    textDeltaReceived(state, action: PayloadAction<string>) {
+      state.rawBuffer += action.payload;
+      state.streamingProfile = parsePartialJson<DeveloperProfile>(
+        state.rawBuffer,
+      );
+    },
+    authRequired(state, action: PayloadAction<AuthUrl[]>) {
+      state.status = "auth_required";
+      state.authUrls = action.payload;
+    },
+    streamReset(state) {
+      state.activity = [];
+      state.streamingProfile = null;
+      state.rawBuffer = "";
+      state.error = null;
+      state.authUrls = [];
+    },
   },
   extraReducers: (builder) => {
     builder
-      .addCase(runProfileAgent.pending, (state) => {
-        state.status = "running";
-        state.error = null;
+      .addCase(runProfileStream.pending, (state) => {
+        state.status = "connecting";
       })
-      .addCase(runProfileAgent.fulfilled, (state, action) => {
-        state.status = "succeeded";
-        state.data = action.payload.profile;
-        state.raw = action.payload.raw;
-        state.parseFailed = action.payload.parseFailed;
-        state.cached = action.payload.cached;
-        state.generatedAt = action.payload.generatedAt ?? null;
+      .addCase(runProfileStream.fulfilled, (state, action) => {
+        if (action.payload && "profile" in action.payload) {
+          state.status = "succeeded";
+          state.data = action.payload.profile;
+          state.generatedAt = action.payload.generatedAt;
+          state.cached = false;
+        }
       })
-      .addCase(runProfileAgent.rejected, (state, action) => {
+      .addCase(runProfileStream.rejected, (state, action) => {
         state.status = "failed";
         state.error =
-          action.error.message ?? "Failed to analyze GitHub profile.";
+          action.payload ??
+          action.error.message ??
+          "Failed to analyze GitHub profile.";
+      })
+      .addCase(resumeProfileStream.pending, (state) => {
+        state.status = "running";
+      })
+      .addCase(resumeProfileStream.fulfilled, (state, action) => {
+        if (action.payload) {
+          state.status = "succeeded";
+          state.data = action.payload.profile;
+          state.generatedAt = action.payload.generatedAt;
+          state.cached = false;
+        }
+      })
+      .addCase(resumeProfileStream.rejected, (state, action) => {
+        state.status = "failed";
+        state.error =
+          action.payload ??
+          action.error.message ??
+          "Failed to resume profile analysis.";
       });
   },
 });
 
-export const { resetProfile } = profileSlice.actions;
-export default profileSlice.reducer;
+export const { resetProfile } = {
+  resetProfile: devProfileSlice.actions.streamReset,
+};
+export default devProfileSlice.reducer;

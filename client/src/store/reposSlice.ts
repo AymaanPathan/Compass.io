@@ -1,189 +1,188 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
-
 import {
-  fetchRepoRecommendations,
-  resumeRepoRecommendations,
-} from "../api/axios";
-
+  createSlice,
+  createAsyncThunk,
+  type PayloadAction,
+} from "@reduxjs/toolkit";
+import {
+  consumeAgentStream,
+  type AgentActivityEvent,
+  type AuthUrl,
+} from "./agentStream";
 import type { MatchedRepository } from "../types";
+import type { AgentRunStatus } from "./profileSlice";
 
-interface AuthUrl {
-  name: string;
-  authUrl: string;
-}
+const API_ROOT = (
+  import.meta.env.VITE_API_URL ?? "http://localhost:5000"
+).replace(/\/+$/, "");
+const API_BASE = `${API_ROOT}/api/oss`;
 
-interface RepoRecommendationsResponse {
-  success: true;
-  status: "done";
+interface RepoRecommendations {
   matchedRepositories: MatchedRepository[];
-  cached: boolean;
-  generatedAt?: string;
 }
 
-interface RepoAuthRequiredResponse {
-  success: false;
-  status: "auth_required";
-  sessionId: string;
-  authUrls: AuthUrl[];
-}
-
-type RepoAgentResponse = RepoRecommendationsResponse | RepoAuthRequiredResponse;
-
-interface ReposState {
+interface OssState {
   data: MatchedRepository[] | null;
-
-  status: "idle" | "running" | "auth_required" | "succeeded" | "failed";
-
+  activity: AgentActivityEvent[];
+  status: AgentRunStatus;
   error: string | null;
-
-  generatedAt: string | null;
-
-  cached: boolean;
-
-  sessionId: string | null;
-
   authUrls: AuthUrl[];
+  generatedAt: string | null;
+  cached: boolean;
+  /** Has the user ever kicked off a run this session — drives idle-vs-never-started UI. */
+  hasStarted: boolean;
 }
 
-const initialState: ReposState = {
+const initialState: OssState = {
   data: null,
+  activity: [],
   status: "idle",
   error: null,
+  authUrls: [],
   generatedAt: null,
   cached: false,
-  sessionId: null,
-  authUrls: [],
+  hasStarted: false,
 };
 
-export const runRepoAgent = createAsyncThunk<
-  RepoAgentResponse,
-  boolean | undefined,
-  {
-    rejectValue: string;
-  }
->("repos/run", async (force = false, { rejectWithValue }) => {
-  try {
-    return await fetchRepoRecommendations(force);
-  } catch (error: any) {
-    return rejectWithValue(
-      error?.response?.data?.error ?? "Failed to fetch recommendations.",
-    );
-  }
-});
+async function runStream(
+  url: string,
+  dispatch: (action: any) => void,
+): Promise<
+  | { recs: RepoRecommendations; raw: string }
+  | { authUrls: AuthUrl[] }
+  | { error: string }
+> {
+  const result = await consumeAgentStream<RepoRecommendations>(url, {
+    onPhase: () => dispatch(ossSlice.actions.phaseChanged("running")),
+    onActivity: (event) => dispatch(ossSlice.actions.activityAdded(event)),
+    onAuthRequired: (authUrls) =>
+      dispatch(ossSlice.actions.authRequired(authUrls)),
+  });
 
-export const resumeRepoAgent = createAsyncThunk<
-  RepoAgentResponse,
+  if (result.kind === "error") return { error: result.message };
+  if (result.kind === "auth_required") return { authUrls: result.authUrls };
+  return { recs: result.data, raw: result.raw };
+}
+
+async function commitRecommendations(payload: {
+  data: RepoRecommendations;
+  raw: string;
+}) {
+  await fetch(`${API_BASE}/recommendations/commit`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Authorization: `Bearer ${localStorage.getItem("accessToken")}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+export const runOssStream = createAsyncThunk<
+  | { matchedRepositories: MatchedRepository[]; generatedAt: string }
+  | { authUrls: AuthUrl[] }
+  | null,
   void,
-  {
-    rejectValue: string;
-  }
->("repos/resume", async (_, { rejectWithValue }) => {
-  try {
-    return await resumeRepoRecommendations();
-  } catch (error: any) {
-    return rejectWithValue(
-      error?.response?.data?.error ?? "Failed to resume recommendations.",
-    );
-  }
+  { rejectValue: string }
+>("oss/stream", async (_, { dispatch, rejectWithValue }) => {
+  dispatch(ossSlice.actions.streamReset());
+
+  const result = await runStream(
+    `${API_BASE}/recommendations/stream`,
+    dispatch,
+  );
+  if ("error" in result) return rejectWithValue(result.error);
+  if ("authUrls" in result) return result;
+
+  await commitRecommendations({ data: result.recs, raw: result.raw });
+  return {
+    matchedRepositories: result.recs.matchedRepositories,
+    generatedAt: new Date().toISOString(),
+  };
 });
 
-const reposSlice = createSlice({
-  name: "repos",
+export const resumeOssStream = createAsyncThunk<
+  { matchedRepositories: MatchedRepository[]; generatedAt: string } | null,
+  void,
+  { rejectValue: string }
+>("oss/resumeStream", async (_, { dispatch, rejectWithValue }) => {
+  const result = await runStream(
+    `${API_BASE}/recommendations/stream/resume`,
+    dispatch,
+  );
+  if ("error" in result) return rejectWithValue(result.error);
+  if ("authUrls" in result)
+    return rejectWithValue("Still waiting on GitHub authorization");
 
+  await commitRecommendations({ data: result.recs, raw: result.raw });
+  return {
+    matchedRepositories: result.recs.matchedRepositories,
+    generatedAt: new Date().toISOString(),
+  };
+});
+
+const ossSlice = createSlice({
+  name: "oss",
   initialState,
-
   reducers: {
-    resetRepos: () => initialState,
+    phaseChanged(state, action: PayloadAction<AgentRunStatus>) {
+      state.status = action.payload;
+    },
+    activityAdded(state, action: PayloadAction<AgentActivityEvent>) {
+      state.activity.push(action.payload);
+    },
+    authRequired(state, action: PayloadAction<AuthUrl[]>) {
+      state.status = "auth_required";
+      state.authUrls = action.payload;
+    },
+    streamReset(state) {
+      state.activity = [];
+      state.error = null;
+      state.authUrls = [];
+      state.hasStarted = true;
+    },
   },
-
   extraReducers: (builder) => {
     builder
-
-      // ─────────────────────────────────────────────
-      // Initial recommendation run
-      // ─────────────────────────────────────────────
-
-      .addCase(runRepoAgent.pending, (state) => {
-        state.status = "running";
-        state.error = null;
+      .addCase(runOssStream.pending, (state) => {
+        state.status = "connecting";
       })
-
-      .addCase(runRepoAgent.fulfilled, (state, action) => {
-        const result = action.payload;
-
-        // Agent needs OAuth/MCP authorization.
-        if (result.status === "auth_required") {
-          state.status = "auth_required";
-          state.sessionId = result.sessionId;
-          state.authUrls = result.authUrls;
-          state.error = null;
-
-          return;
+      .addCase(runOssStream.fulfilled, (state, action) => {
+        if (action.payload && "matchedRepositories" in action.payload) {
+          state.status = "succeeded";
+          state.data = action.payload.matchedRepositories;
+          state.generatedAt = action.payload.generatedAt;
+          state.cached = false;
         }
-
-        // Agent completed successfully.
-        state.status = "succeeded";
-        state.data = result.matchedRepositories;
-        state.cached = result.cached;
-        state.generatedAt = result.generatedAt ?? null;
-
-        state.sessionId = null;
-        state.authUrls = [];
-        state.error = null;
       })
-
-      .addCase(runRepoAgent.rejected, (state, action) => {
+      .addCase(runOssStream.rejected, (state, action) => {
         state.status = "failed";
         state.error =
           action.payload ??
           action.error.message ??
-          "Failed to fetch recommendations.";
+          "Failed to find repo matches.";
       })
-
-      // ─────────────────────────────────────────────
-      // Resume after authorization
-      // ─────────────────────────────────────────────
-
-      .addCase(resumeRepoAgent.pending, (state) => {
+      .addCase(resumeOssStream.pending, (state) => {
         state.status = "running";
-        state.error = null;
       })
-
-      .addCase(resumeRepoAgent.fulfilled, (state, action) => {
-        const result = action.payload;
-
-        // Agent may request authorization again.
-        if (result.status === "auth_required") {
-          state.status = "auth_required";
-          state.sessionId = result.sessionId;
-          state.authUrls = result.authUrls;
-          state.error = null;
-
-          return;
+      .addCase(resumeOssStream.fulfilled, (state, action) => {
+        if (action.payload) {
+          state.status = "succeeded";
+          state.data = action.payload.matchedRepositories;
+          state.generatedAt = action.payload.generatedAt;
+          state.cached = false;
         }
-
-        // Resume completed successfully.
-        state.status = "succeeded";
-        state.data = result.matchedRepositories;
-        state.cached = result.cached;
-        state.generatedAt = result.generatedAt ?? null;
-
-        state.sessionId = null;
-        state.authUrls = [];
-        state.error = null;
       })
-
-      .addCase(resumeRepoAgent.rejected, (state, action) => {
+      .addCase(resumeOssStream.rejected, (state, action) => {
         state.status = "failed";
         state.error =
           action.payload ??
           action.error.message ??
-          "Failed to resume recommendations.";
+          "Failed to resume repo matching.";
       });
   },
 });
 
-export const { resetRepos } = reposSlice.actions;
-
-export default reposSlice.reducer;
+export const { resetOss } = { resetOss: ossSlice.actions.streamReset };
+export default ossSlice.reducer;

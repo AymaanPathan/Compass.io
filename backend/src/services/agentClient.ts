@@ -1,6 +1,6 @@
 import { TrueForge } from "@truefoundry/trueforge-sdk";
 
-export const agentClient = new TrueForge({
+export const trueforge = new TrueForge({
   baseUrl: process.env.TRUEFORGE_BASE_URL ?? "http://localhost:8791",
   timeoutInSeconds: 600,
 });
