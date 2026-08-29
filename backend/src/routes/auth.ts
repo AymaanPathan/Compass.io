@@ -105,7 +105,7 @@ router.get("/github/callback", async (req: Request, res: Response) => {
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
-    res.redirect(`${process.env.CLIENT_URL}/analysis`);
+    res.redirect(`${process.env.CLIENT_URL}/sessions`);
   } catch (err: any) {
     console.error("GitHub OAuth error:", err.response?.data || err.message);
     res.redirect(`${process.env.CLIENT_URL}?error=oauth_failed`);

@@ -27,7 +27,7 @@ export default function Nav() {
   return (
     <header className="border-b border-white/[0.06] bg-black/80 backdrop-blur sticky top-0 z-20">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-        <Link to="/analysis" className="flex items-center gap-2.5">
+        <Link to="/sessions" className="flex items-center gap-2.5">
           <MarkGlyph />
           <span className="font-mono-brand text-xs uppercase tracking-[0.2em] text-white">
             Compass

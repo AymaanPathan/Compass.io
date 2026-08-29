@@ -101,11 +101,20 @@ router.post(
 
       // Fresh session per generation, so a re-run isn't polluted by the last
       // run's history or a half-finished tool call.
-      const { data: session } = await trueforge.sessions.create({
+      // NOTE: HttpResponsePromise resolves DIRECTLY to the value — there is
+      // no `.data` wrapper. Destructuring `.data` here previously produced
+      // `undefined`, which was the root cause of the
+      // "Expected object. Received undefined" crash.
+
+      const sessionResponse = await trueforge.sessions.create({
         agent: { name: DEV_PROFILE_AGENT_NAME },
       });
 
+      const session = sessionResponse.data;
+      console.log("CREATED SESSION:", JSON.stringify(session, null, 2));
+
       user.developerProfileSessionId = session.id;
+
       await user.save();
 
       await streamAgentTurn<DeveloperProfile>(

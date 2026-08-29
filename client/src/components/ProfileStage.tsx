@@ -1,7 +1,8 @@
 import type { DeveloperProfile } from "../types";
-import type { AgentActivityEvent, AuthUrl } from "../store/agentStream";
+import type { AuthUrl } from "../store/agentStream";
 import type { AgentRunStatus } from "../store/profileSlice";
-import AgentConsole from "./AgentConsole";
+import type { StepNode } from "../hooks/useAgentStep";
+import AgentStepsPanel from "./AgentStepsPanel";
 
 const FONT_DISPLAY = "'Fraunces', ui-serif, Georgia, serif";
 const FONT_MONO = "'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace";
@@ -10,7 +11,7 @@ interface ProfileStageProps {
   status: AgentRunStatus;
   profile: DeveloperProfile | null;
   streamingProfile: Partial<DeveloperProfile> | null;
-  activity: AgentActivityEvent[];
+  steps: StepNode[];
   authUrls: AuthUrl[];
   error: string | null;
   cached: boolean;
@@ -23,7 +24,7 @@ export default function ProfileStage({
   status,
   profile,
   streamingProfile,
-  activity,
+  steps,
   authUrls,
   error,
   cached,
@@ -42,13 +43,35 @@ export default function ProfileStage({
   ) {
     return (
       <div className="grid gap-6 lg:grid-cols-[1fr_1.4fr]">
-        <AgentConsole
-          agentName="developer-profile-agent"
-          status={status}
-          activity={activity}
-          authUrls={authUrls}
-          onResume={onResume}
-        />
+        <div className="space-y-4">
+          <AgentStepsPanel steps={steps} />
+          {status === "auth_required" && authUrls.length > 0 && (
+            <div className="rounded-lg border border-amber-700/30 bg-amber-500/[0.04] p-4">
+              <p className="text-sm text-amber-300">
+                GitHub authorization needed to continue.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {authUrls.map((a,i) => (
+                  <a
+                    key={i}
+                    href={a.authUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="bubble-btn rounded-md border border-amber-700/40 px-3 py-1.5 text-xs text-amber-200 hover:bg-amber-950/30"
+                  >
+                    Connect {a.name}
+                  </a>
+                ))}
+              </div>
+              <button
+                onClick={onResume}
+                className="bubble-btn mt-3 rounded-md border border-emerald-800/40 px-3 py-1.5 text-xs text-white hover:bg-emerald-950/30"
+              >
+                I've authorized — continue
+              </button>
+            </div>
+          )}
+        </div>
         <LiveProfileBuild profile={streamingProfile} />
       </div>
     );
@@ -56,14 +79,17 @@ export default function ProfileStage({
 
   if (status === "failed") {
     return (
-      <div className="rounded-lg border border-rose-700/30 bg-rose-500/[0.04] p-5">
-        <p className="text-sm text-rose-400">{error}</p>
-        <button
-          onClick={onStart}
-          className="bubble-btn mt-3 rounded-md border border-emerald-800/40 px-3 py-1.5 text-xs text-white hover:bg-emerald-950/30"
-        >
-          Retry
-        </button>
+      <div className="space-y-4">
+        <AgentStepsPanel steps={steps} />
+        <div className="rounded-lg border border-rose-700/30 bg-rose-500/[0.04] p-5">
+          <p className="text-sm text-rose-400">{error}</p>
+          <button
+            onClick={onStart}
+            className="bubble-btn mt-3 rounded-md border border-emerald-800/40 px-3 py-1.5 text-xs text-white hover:bg-emerald-950/30"
+          >
+            Retry
+          </button>
+        </div>
       </div>
     );
   }
@@ -126,6 +152,8 @@ export default function ProfileStage({
               />
               <ListCard title="Fun insights" items={profile.funInsights} />
             </div>
+
+            <AgentStepsPanel steps={steps} />
           </div>
 
           <aside className="space-y-6">

@@ -42,9 +42,6 @@ export default function App() {
             </RequireAuth>
           }
         />
-        {/* old links keep working */}
-        <Route path="/analysis" element={<Navigate to="/sessions" replace />} />
-        <Route path="/discover" element={<Navigate to="/sessions" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

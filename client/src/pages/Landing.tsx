@@ -179,13 +179,19 @@ const COLUMNS: Column[] = [
 
 function Landing() {
   const navigate = useNavigate();
-  const { user, status } = useSelector((state: RootState) => state.auth);
+
+  // Select primitives individually instead of destructuring a new object
+  // literal from useSelector each render — that was creating a fresh
+  // reference every render, which fed the effect below and caused an
+  // infinite render loop ("Maximum update depth exceeded").
+  const status = useSelector((state: RootState) => state.auth.status);
+  const hasUser = useSelector((state: RootState) => Boolean(state.auth.user));
 
   useEffect(() => {
-    if (status !== "loading" && status !== "idle" && user) {
-      navigate("/analysis", { replace: true });
+    if (status !== "loading" && status !== "idle" && hasUser) {
+      navigate("/sessions", { replace: true });
     }
-  }, [status, user, navigate]);
+  }, [status, hasUser, navigate]);
 
   const handleFindFirstContribution = () => {
     sessionStorage.setItem("compass_auto_find", "1");
@@ -274,7 +280,7 @@ function Landing() {
             style={{ fontFamily: FONT_MONO }}
           >
             <a
-              href="#how-it-works"
+              href="#how-it-works" 
               className="hover:text-emerald-400 transition-colors"
             >
               How it works

@@ -1,19 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import type { StepEvent, AuthUrl } from "../utils/agentEvents";
 
-export interface AuthUrl {
-  name: string;
-  authUrl: string;
-}
-
-export type AgentActivityEvent =
-  | {
-      id: string;
-      type: "tool_call";
-      tool: string;
-      label: string;
-      description: string;
-    }
-  | { id: string; type: "tool_result"; tool: string; label: string };
+export type { AuthUrl } from "../utils/agentEvents";
 
 export type AgentStreamResult<T> =
   | { kind: "done"; data: T; raw: string }
@@ -22,18 +10,17 @@ export type AgentStreamResult<T> =
 
 export interface AgentStreamHandlers {
   onPhase?: (phase: string) => void;
-  onActivity?: (event: AgentActivityEvent) => void;
-  onTextDelta?: (delta: string) => void;
+  onEvent?: (event: StepEvent) => void;
   onAuthRequired?: (authUrls: AuthUrl[]) => void;
 }
 
 const getToken = () => localStorage.getItem("accessToken");
 
 /**
- * Opens a POST'd SSE stream at `url` and dispatches parsed frames to
- * `handlers` as they arrive, live. Resolves once the stream ends with the
- * terminal outcome (done / auth_required / error) so a thunk can persist
- * or react to it.
+ * Opens a POST'd SSE stream at `url`, forwards every parsed StepEvent to
+ * `handlers.onEvent` live (drives the step tree UI), and separately
+ * accumulates text_delta chunks to resolve the final parsed payload once
+ * `turn_done` arrives.
  */
 export async function consumeAgentStream<T>(
   url: string,
@@ -55,58 +42,67 @@ export async function consumeAgentStream<T>(
     };
   }
 
+  handlers.onPhase?.("connecting");
+
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let rawBuffer = "";
   let result: AgentStreamResult<T> | null = null;
+
+  const handleEvent = (event: StepEvent) => {
+    handlers.onEvent?.(event);
+
+    switch (event.type) {
+      case "text_delta":
+        rawBuffer += event.delta;
+        break;
+
+      case "auth_required":
+        handlers.onAuthRequired?.(event.mcpServers);
+        result = { kind: "auth_required", authUrls: event.mcpServers };
+        break;
+
+      case "turn_done":
+        if (event.status === "error") {
+          result = { kind: "error", message: "Agent turn ended in error." };
+        } else if (!result) {
+          try {
+            const data = JSON.parse(rawBuffer) as T;
+            result = { kind: "done", data, raw: rawBuffer };
+          } catch {
+            result = {
+              kind: "error",
+              message: "Agent finished but returned malformed output.",
+            };
+          }
+        }
+        break;
+
+      case "error":
+        result = { kind: "error", message: event.message };
+        break;
+
+      default:
+        break;
+    }
+  };
 
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
 
-    let idx: number;
-    while ((idx = buffer.indexOf("\n\n")) !== -1) {
-      const frame = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-      if (!frame.startsWith("data: ")) continue; // skip heartbeats/comments
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
 
-      const event = JSON.parse(frame.slice(6));
-
-      switch (event.type) {
-        case "phase":
-          handlers.onPhase?.(event.phase);
-          break;
-        case "tool_call":
-          handlers.onActivity?.({
-            id: `tool_call-${event.tool}-${Date.now()}`,
-            type: "tool_call",
-            tool: event.tool,
-            label: event.label,
-            description: event.description,
-          });
-          break;
-        case "tool_result":
-          handlers.onActivity?.({
-            id: `tool_result-${event.tool}-${Date.now()}`,
-            type: "tool_result",
-            tool: event.tool,
-            label: event.label,
-          });
-          break;
-        case "text_delta":
-          handlers.onTextDelta?.(event.delta);
-          break;
-        case "auth_required":
-          handlers.onAuthRequired?.(event.authUrls);
-          result = { kind: "auth_required", authUrls: event.authUrls };
-          break;
-        case "done":
-          result = { kind: "done", data: event.data, raw: event.raw };
-          break;
-        case "error":
-          result = { kind: "error", message: event.message };
-          break;
+    for (const part of parts) {
+      const line = part.trim();
+      if (!line.startsWith("data:")) continue; // skip heartbeats/comments
+      try {
+        handleEvent(JSON.parse(line.slice(5).trim()) as StepEvent);
+      } catch {
+        console.error("Failed to parse SSE frame:", line);
       }
     }
   }
