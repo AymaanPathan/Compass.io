@@ -1,13 +1,71 @@
+// backend/src/services/agentStream.ts
+// Consolidated: was split across services/agentStreaming.ts + utils/agentEvents.ts.
+// Merged into one file since it's a single concern (SSE event shape + SSE emit logic).
+
 import { Response } from "express";
 import { trueforge } from "./agentClient";
-import type { StepEvent, NormalizedToolCall } from "../utils/agentEvents";
-
 import { TurnStreamingEvent } from "truefoundry-gateway-sdk/agents";
+
+// ---------- Types (was utils/agentEvents.ts) ----------
+
+export type StepEvent =
+  | { type: "turn_start"; turnId: string }
+  | { type: "reasoning_delta"; id: string; delta: string }
+  | { type: "reasoning_done"; id: string; content: string }
+  | {
+      type: "tool_call_delta";
+      messageId: string;
+      index: number;
+      id?: string;
+      name?: string;
+      argsDelta?: string;
+    }
+  | {
+      type: "tool_call_done";
+      messageId: string;
+      toolCalls: NormalizedToolCall[];
+    }
+  | { type: "tool_result"; toolCallId: string; content: string }
+  | {
+      type: "thread_start";
+      threadId: string;
+      parentToolCallId: string;
+      agentName: string;
+      agentInput: string;
+    }
+  | { type: "thread_end"; threadId: string }
+  | { type: "text_delta"; id: string; delta: string }
+  | {
+      type: "auth_required";
+      mcpServers: { id: string; name: string; authUrl: string }[];
+    }
+  | {
+      type: "turn_done";
+      status: "done" | "cancelled" | "error";
+      requiredActions?: unknown;
+    }
+  | { type: "error"; message: string };
+
+export interface AuthUrl {
+  id: string;
+  name: string;
+  authUrl: string;
+}
+
+export interface NormalizedToolCall {
+  id: string;
+  name: string;
+  arguments: unknown;
+  toolInfo?: { type: string; name?: string; serverName?: string };
+  meaning?: { label: string; description: string };
+}
 
 export interface ToolMeaning {
   label: string;
   description: string;
 }
+
+// ---------- SSE plumbing (was services/agentStreaming.ts) ----------
 
 function sse(res: Response, event: StepEvent) {
   res.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -23,13 +81,12 @@ export function openSse(res: Response) {
   return setInterval(() => res.write(":hb\n\n"), 15000);
 }
 
-export async function streamAgentTurn<T>(
+export async function streamAgentTurn(
   res: Response,
   sessionId: string,
   input: any[],
   label: string,
   toolMeanings: Record<string, ToolMeaning>,
-  _unused: undefined,
   hooks: {
     onAuthRequired: () => Promise<void>;
     onError: (message: string) => Promise<void>;
@@ -48,7 +105,6 @@ export async function streamAgentTurn<T>(
           break;
 
         case "model.message.delta": {
-          // Confirmed flat shape — no nested `.delta` object.
           if (event.reasoningContent) {
             sse(res, {
               type: "reasoning_delta",
@@ -101,7 +157,6 @@ export async function streamAgentTurn<T>(
         }
 
         case "tool.response":
-          // Confirmed: content is already a plain string.
           sse(res, {
             type: "tool_result",
             toolCallId: event.toolCallId,
@@ -110,7 +165,6 @@ export async function streamAgentTurn<T>(
           break;
 
         case "thread.created":
-          // ASSUMPTION pending confirmation: AgentParent = { threadId, toolCallId }
           sse(res, {
             type: "thread_start",
             threadId: event.threadId,
@@ -121,12 +175,10 @@ export async function streamAgentTurn<T>(
           break;
 
         case "thread.done":
-          // ASSUMPTION pending confirmation: threadId comes from BaseThreadDoneEvent
           sse(res, { type: "thread_end", threadId: (event as any).threadId });
           break;
 
         case "mcp.auth_required":
-          // ASSUMPTION pending confirmation: McpServerAuthInfo = { id, name, authUrl }
           sse(res, {
             type: "auth_required",
             mcpServers: (event.mcpServers as any[]).map((s) => ({
@@ -139,7 +191,6 @@ export async function streamAgentTurn<T>(
           return;
 
         case "turn.done": {
-          // ASSUMPTION pending confirmation: TurnDoneEventState = { status, requiredActions }
           const state = event.state as any;
           sse(res, {
             type: "turn_done",

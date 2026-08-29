@@ -4,11 +4,15 @@ import {
   createAsyncThunk,
   type PayloadAction,
 } from "@reduxjs/toolkit";
-import { consumeAgentStream, type AuthUrl } from "./agentStream";
-import { applyEvent, type StepNode } from "../hooks/useAgentStep";
+import {
+  consumeAgentStream,
+  applyEvent,
+  type AuthUrl,
+  type StepEvent,
+  type StepNode,
+} from "../utils/agentStream";
 import { parsePartialJson } from "../utils/partialJson";
 import type { DeveloperProfile } from "../types";
-import type { StepEvent } from "../utils/agentEvents";
 
 const API_ROOT = (
   import.meta.env.VITE_API_URL ?? "http://localhost:5000"

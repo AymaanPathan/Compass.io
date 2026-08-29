@@ -6,9 +6,12 @@ import {
 } from "@reduxjs/toolkit";
 import {
   consumeAgentStream,
-  type AgentActivityEvent,
+  applyEvent,
   type AuthUrl,
-} from "./agentStream";
+  type StepEvent,
+  type StepNode,
+} from "../utils/agentStream";
+import { parsePartialJson } from "../utils/partialJson";
 import type { MatchedRepository } from "../types";
 import type { AgentRunStatus } from "./profileSlice";
 
@@ -23,24 +26,28 @@ interface RepoRecommendations {
 
 interface OssState {
   data: MatchedRepository[] | null;
-  activity: AgentActivityEvent[];
+  streamingRepos: Partial<RepoRecommendations> | null;
+  steps: StepNode[];
   status: AgentRunStatus;
   error: string | null;
   authUrls: AuthUrl[];
   generatedAt: string | null;
   cached: boolean;
+  rawBuffer: string;
   /** Has the user ever kicked off a run this session — drives idle-vs-never-started UI. */
   hasStarted: boolean;
 }
 
 const initialState: OssState = {
   data: null,
-  activity: [],
+  streamingRepos: null,
+  steps: [],
   status: "idle",
   error: null,
   authUrls: [],
   generatedAt: null,
   cached: false,
+  rawBuffer: "",
   hasStarted: false,
 };
 
@@ -54,7 +61,13 @@ async function runStream(
 > {
   const result = await consumeAgentStream<RepoRecommendations>(url, {
     onPhase: () => dispatch(ossSlice.actions.phaseChanged("running")),
-    onActivity: (event) => dispatch(ossSlice.actions.activityAdded(event)),
+    onEvent: (event: StepEvent) => {
+      if (event.type === "text_delta") {
+        dispatch(ossSlice.actions.textDeltaReceived(event.delta));
+      } else {
+        dispatch(ossSlice.actions.stepEventReceived(event));
+      }
+    },
     onAuthRequired: (authUrls) =>
       dispatch(ossSlice.actions.authRequired(authUrls)),
   });
@@ -129,15 +142,35 @@ const ossSlice = createSlice({
     phaseChanged(state, action: PayloadAction<AgentRunStatus>) {
       state.status = action.payload;
     },
-    activityAdded(state, action: PayloadAction<AgentActivityEvent>) {
-      state.activity.push(action.payload);
+    stepEventReceived(state, action: PayloadAction<StepEvent>) {
+      const next = applyEvent(
+        {
+          steps: state.steps,
+          status: state.status,
+          error: state.error,
+          authUrls: state.authUrls,
+        },
+        action.payload,
+      );
+      state.steps = next.steps;
+      state.status = next.status;
+      state.error = next.error;
+      state.authUrls = next.authUrls;
+    },
+    textDeltaReceived(state, action: PayloadAction<string>) {
+      state.rawBuffer += action.payload;
+      state.streamingRepos = parsePartialJson<RepoRecommendations>(
+        state.rawBuffer,
+      );
     },
     authRequired(state, action: PayloadAction<AuthUrl[]>) {
       state.status = "auth_required";
       state.authUrls = action.payload;
     },
     streamReset(state) {
-      state.activity = [];
+      state.steps = [];
+      state.streamingRepos = null;
+      state.rawBuffer = "";
       state.error = null;
       state.authUrls = [];
       state.hasStarted = true;

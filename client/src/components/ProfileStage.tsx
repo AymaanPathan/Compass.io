@@ -1,7 +1,6 @@
 import type { DeveloperProfile } from "../types";
-import type { AuthUrl } from "../store/agentStream";
+import type { AuthUrl } from "../utils/agentStream";
 import type { AgentRunStatus } from "../store/profileSlice";
-import type { StepNode } from "../hooks/useAgentStep";
 import AgentStepsPanel from "./AgentStepsPanel";
 
 const FONT_DISPLAY = "'Fraunces', ui-serif, Georgia, serif";
@@ -11,7 +10,6 @@ interface ProfileStageProps {
   status: AgentRunStatus;
   profile: DeveloperProfile | null;
   streamingProfile: Partial<DeveloperProfile> | null;
-  steps: StepNode[];
   authUrls: AuthUrl[];
   error: string | null;
   cached: boolean;
@@ -24,7 +22,6 @@ export default function ProfileStage({
   status,
   profile,
   streamingProfile,
-  steps,
   authUrls,
   error,
   cached,
