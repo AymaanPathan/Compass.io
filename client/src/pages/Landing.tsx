@@ -491,7 +491,7 @@ function Landing() {
                     className="space-y-1 text-[13px] text-neutral-300"
                     style={{ fontFamily: FONT_MONO }}
                   >
-                    <SidebarItem icon={<IconGrid />} label="Board" active />
+                    <SidebarItem icon={<IconGrid />} label="Issues" active />
                     <SidebarItem icon={<IconRepo />} label="Repositories" />
                     <SidebarItem icon={<IconList />} label="Sessions" />
                     <SidebarItem icon={<IconGear />} label="Settings" />

@@ -11,7 +11,7 @@ async function createDeveloperProfileAgent() {
 
       manifest: {
         model: {
-          name: "nvidia-model/openai-gpt-oss-120b",
+          name: "nemotron/nvidia-nemotron-3-super-120b-a-12b",
         },
 
         instructions: `

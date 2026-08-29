@@ -1,7 +1,3 @@
-// backend/src/services/agentStream.ts
-// Consolidated: was split across services/agentStreaming.ts + utils/agentEvents.ts.
-// Merged into one file since it's a single concern (SSE event shape + SSE emit logic).
-
 import { Response } from "express";
 import { trueforge } from "./agentClient";
 import { TurnStreamingEvent } from "truefoundry-gateway-sdk/agents";
@@ -81,12 +77,20 @@ export function openSse(res: Response) {
   return setInterval(() => res.write(":hb\n\n"), 15000);
 }
 
-export async function streamAgentTurn(
+/**
+ * The `<T>` here doesn't drive any runtime parsing — this function only
+ * streams raw StepEvents over SSE. It exists so callers can annotate what
+ * shape they *expect* the final agent output to be (e.g. `DeveloperProfile`)
+ * for their own downstream typing/documentation, without this function
+ * needing to know or validate that shape.
+ */
+export async function streamAgentTurn<T = unknown>(
   res: Response,
   sessionId: string,
   input: any[],
   label: string,
   toolMeanings: Record<string, ToolMeaning>,
+  resultValidator: ((value: unknown) => value is T) | undefined,
   hooks: {
     onAuthRequired: () => Promise<void>;
     onError: (message: string) => Promise<void>;

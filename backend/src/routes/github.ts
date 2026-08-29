@@ -2,11 +2,7 @@ import { Router, Response } from "express";
 import User from "../models/User";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import { DEV_PROFILE_AGENT_NAME, trueforge } from "../services/agentClient";
-import {
-  openSse,
-  streamAgentTurn,
-  ToolMeaning,
-} from "../services/agentStreaming";
+import { openSse, streamAgentTurn, ToolMeaning } from "../services/agentStream";
 
 const router = Router();
 

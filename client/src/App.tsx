@@ -4,6 +4,8 @@ import { useAppDispatch, useAppSelector } from "./store/storeHook";
 import { loadCurrentUser } from "./store/authSlice";
 import Landing from "./pages/Landing";
 import Sessions from "./pages/Sessions";
+import Repositories from "./pages/Repositories";
+import Issues from "./pages/Issues";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { status } = useAppSelector((s) => s.auth);
@@ -39,6 +41,22 @@ export default function App() {
           element={
             <RequireAuth>
               <Sessions />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/repositories"
+          element={
+            <RequireAuth>
+              <Repositories />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/issues"
+          element={
+            <RequireAuth>
+              <Issues />
             </RequireAuth>
           }
         />

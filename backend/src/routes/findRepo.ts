@@ -5,11 +5,7 @@ import {
   REPO_RECOMMENDER_AGENT_NAME,
   trueforge,
 } from "../services/agentClient";
-import {
-  openSse,
-  streamAgentTurn,
-  ToolMeaning,
-} from "../services/agentStreaming";
+import { openSse, streamAgentTurn, ToolMeaning } from "../services/agentStream";
 
 const router = Router();
 
@@ -174,9 +170,13 @@ router.post(
     const heartbeat = openSse(res);
 
     try {
-      const { data: session } = await trueforge.sessions.create({
+      // NOTE: HttpResponsePromise resolves to a wrapper — the actual
+      // session object is under `.data`, same as the profile route.
+      const sessionResponse = await trueforge.sessions.create({
         agent: { name: REPO_RECOMMENDER_AGENT_NAME },
       });
+
+      const session = sessionResponse.data;
 
       claimedUser.repoRecommendationsSessionId = session.id;
       await claimedUser.save();
@@ -223,6 +223,9 @@ router.post(
       );
 
       await markRepoRecommendationFailed(claimedUser.id, message);
+    } finally {
+      clearInterval(heartbeat);
+      res.end();
     }
   },
 );
@@ -251,11 +254,12 @@ router.post(
         TOOL_MEANINGS,
         validateRecommendations,
         {
-          onAuthRequired: () =>
-            User.updateOne(
+          onAuthRequired: async () => {
+            await User.updateOne(
               { _id: user.id },
               { $set: { repoRecommendationsStatus: "auth_required" } },
-            ),
+            );
+          },
           onError: (message) => markRepoRecommendationFailed(user.id, message),
         },
       );
