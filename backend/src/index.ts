@@ -2,13 +2,13 @@ import "dotenv/config";
 import express, { Request, Response } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-
+import repoKanbanRoutes from "./routes/repoKanban";
 import { connectDB } from "./config/db";
 import authRoutes from "./routes/auth";
 import githubRoutes from "./routes/github";
 import ossRoutes from "./routes/findRepo";
-import solverRoutes from "./routes/solver";
 import issuesRoutes from "./routes/issues";
+import issueFinderRoutes from "./routes/issueFinder.route"; 
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -38,8 +38,9 @@ app.use(cookieParser());
 app.use("/api/auth", authRoutes);
 app.use("/api/github", githubRoutes);
 app.use("/api/oss", ossRoutes);
+app.use("/api/kanban", repoKanbanRoutes);
 app.use("/api/issues", issuesRoutes);
-app.use("/api/solver", solverRoutes);
+app.use("/api/issue-finder", issueFinderRoutes); 
 
 app.get("/", (_req: Request, res: Response) => {
   res.json({

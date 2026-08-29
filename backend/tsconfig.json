@@ -12,6 +12,6 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*", "../client/src/api"],
+  "include": ["src/**/*", "../client/src/api", "../client/src/utils/partialJson.ts"],
   "exclude": ["node_modules", "dist"]
 }

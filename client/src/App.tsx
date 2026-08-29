@@ -3,8 +3,9 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useAppDispatch, useAppSelector } from "./store/storeHook";
 import { loadCurrentUser } from "./store/authSlice";
 import Landing from "./pages/Landing";
-import Analysis from "./pages/Analysis";
-import Discover from "./pages/Discover";
+import Sessions from "./pages/Sessions";
+import Repositories from "./pages/RepositoriesKanban";
+import Issues from "./pages/Issues";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { status } = useAppSelector((s) => s.auth);
@@ -12,7 +13,7 @@ function RequireAuth({ children }: { children: JSX.Element }) {
   if (status === "idle" || status === "loading") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-black">
-        <div className="h-6 w-6 rounded-full border-2 border-neutral-800 border-t-white animate-spin" />
+        <div className="h-6 w-6 rounded-full border-2 border-neutral-800 border-t-emerald-500 animate-spin" />
       </div>
     );
   }
@@ -36,20 +37,28 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Landing />} />
         <Route
-          path="/analysis"
+          path="/sessions"
           element={
             <RequireAuth>
-              <Analysis />
+              <Sessions />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/repositories"
+          element={
+            <RequireAuth>
+              <Repositories />
             </RequireAuth>
           }
         />
 
         <Route path="*" element={<Navigate to="/" replace />} />
         <Route
-          path="/discover"
+          path="/issues"
           element={
             <RequireAuth>
-              <Discover />
+              <Issues />
             </RequireAuth>
           }
         />

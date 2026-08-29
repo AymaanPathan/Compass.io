@@ -11,10 +11,7 @@ async function createAgent() {
 
       manifest: {
         model: {
-          name: "nvidia-model-gpt/openai-gpt-oss-120b",
-          params: {
-            max_tokens: 4000,
-          },
+          name: "nvidia-model/openai-gpt-oss-120b",
         },
 
         instructions: `
@@ -166,7 +163,6 @@ Rules:
           contextManagement: {
             compaction: {
               enabled: true,
-              compactionThresholdTokens: 12000,
             },
 
             largeToolResponse: {

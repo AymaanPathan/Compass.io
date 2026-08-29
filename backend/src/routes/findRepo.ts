@@ -1,9 +1,11 @@
 import { Router, Response } from "express";
-import User from "../models/User";
+import User, { AgentRunLockStatus } from "../models/User";
 import { requireAuth, AuthRequest } from "../middleware/auth";
-import { REPO_RECOMMENDER_AGENT_NAME } from "../services/agentClient";
-import { runAgent, resumeAgent, AgentRunResult } from "../services/agentRunner";
-import { parseAgentJson } from "../utils/agentResponseToJson";
+import {
+  REPO_RECOMMENDER_AGENT_NAME,
+  trueforge,
+} from "../services/agentClient";
+import { openSse, streamAgentTurn, ToolMeaning } from "../services/agentStream";
 
 const router = Router();
 
@@ -20,19 +22,21 @@ interface RepoRecommendations {
 }
 
 /**
- * Validate that a URL points to a GitHub repository over HTTPS.
- *
- * Expected format:
- * https://github.com/owner/repository
+ * Human-facing meaning for each MCP tool the repo-recommender-agent is
+ * allowed to call. Keep in sync with its `enableTools` list.
  */
-function isValidGitHubRepoUrl(value: unknown): value is string {
-  if (typeof value !== "string" || !value.trim()) {
-    return false;
-  }
+const TOOL_MEANINGS: Record<string, ToolMeaning> = {
+  search_repositories: {
+    label: "Searching GitHub",
+    description:
+      "Running a broad search built from your strongest skills and interests",
+  },
+};
 
+function isValidGitHubRepoUrl(value: unknown): value is string {
+  if (typeof value !== "string" || !value.trim()) return false;
   try {
     const url = new URL(value);
-
     return (
       url.protocol === "https:" &&
       url.hostname === "github.com" &&
@@ -43,34 +47,18 @@ function isValidGitHubRepoUrl(value: unknown): value is string {
   }
 }
 
-/**
- * Runtime validation for untrusted agent output.
- *
- * TypeScript interfaces disappear at runtime, so every model response
- * must be validated before it is persisted or returned to the client.
- */
+/** Runtime validation for untrusted agent output. */
 function validateRecommendations(value: unknown): value is RepoRecommendations {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
+  if (!value || typeof value !== "object") return false;
 
   const recommendations = (value as any).matchedRepositories;
-
-  if (!Array.isArray(recommendations)) {
+  if (!Array.isArray(recommendations) || recommendations.length === 0)
     return false;
-  }
-
-  // An empty result is not considered a successful recommendation run.
-  if (recommendations.length === 0) {
-    return false;
-  }
 
   const seenUrls = new Set<string>();
 
   for (const repo of recommendations) {
-    if (!repo || typeof repo !== "object") {
-      return false;
-    }
+    if (!repo || typeof repo !== "object") return false;
 
     const fields = [
       "name",
@@ -79,319 +67,297 @@ function validateRecommendations(value: unknown): value is RepoRecommendations {
       "repoType",
       "whyItMatches",
     ] as const;
-
     for (const field of fields) {
-      if (typeof repo[field] !== "string" || !repo[field].trim()) {
-        return false;
-      }
+      if (typeof repo[field] !== "string" || !repo[field].trim()) return false;
     }
 
-    if (!isValidGitHubRepoUrl(repo.url)) {
-      return false;
-    }
-
-    if (seenUrls.has(repo.url)) {
-      return false;
-    }
-
+    if (!isValidGitHubRepoUrl(repo.url)) return false;
+    if (seenUrls.has(repo.url)) return false;
     seenUrls.add(repo.url);
   }
 
   return true;
 }
 
-/**
- * Release the recommendation lock after a failed run.
- *
- * This ensures a transient agent/database failure does not permanently
- * leave the user in the "running" state.
- */
 async function releaseRepoRecommendationLock(userId: string) {
   await User.updateOne(
     { _id: userId },
     {
+      $set: { repoRecommendationsStatus: "idle" },
+      $unset: { repoRecommendationsSessionId: 1 },
+    },
+  );
+}
+
+async function markRepoRecommendationFailed(userId: string, message: string) {
+  await User.updateOne(
+    { _id: userId },
+    {
       $set: {
-        repoRecommendationsStatus: "idle",
-      },
-      $unset: {
-        repoRecommendationsSessionId: 1,
+        repoRecommendationsStatus: "failed",
+        repoRecommendationsLastError: message,
       },
     },
   );
 }
 
-async function handleAgentResult(
-  user: InstanceType<typeof User>,
-  result: AgentRunResult,
-  res: Response,
+async function releaseLockIfUnchanged(
+  userId: string,
+  statusAtStart: AgentRunLockStatus,
 ) {
-  /**
-   * Agent requires external authorization.
-   *
-   * Keep the session so the frontend can resume it after OAuth.
-   */
-  if (result.status === "auth_required") {
-    user.repoRecommendationsSessionId = result.sessionId;
-    user.repoRecommendationsStatus = "auth_required";
-
-    await user.save();
-
-    console.log(
-      `[find-repo] auth required user=${user.username} session=${result.sessionId}`,
-    );
-
-    return res.status(202).json({
-      success: false,
-      status: "auth_required",
-      sessionId: result.sessionId,
-      authUrls: result.authUrls,
-    });
-  }
-
-  /**
-   * The agent completed, but its output is untrusted.
-   * Parse and validate before saving anything.
-   */
-  const parsed = parseAgentJson<RepoRecommendations>(result.text);
-
-  if (!validateRecommendations(parsed)) {
-    console.error(`[find-repo] invalid recommendations returned by agent`);
-
-    await releaseRepoRecommendationLock(user.id);
-
-    return res.status(500).json({
-      success: false,
-      error: "Agent returned invalid recommendations",
-    });
-  }
-
-  /**
-   * Only validated recommendations reach the database.
-   */
-  user.repoRecommendations = parsed.matchedRepositories;
-  user.repoRecommendationsRaw = result.text;
-  user.repoRecommendationsParseFailed = false;
-  user.repoRecommendationsGeneratedAt = new Date();
-  user.repoRecommendationsSessionId = undefined;
-  user.repoRecommendationsStatus = "idle";
-
-  await user.save();
-
-  console.log(`[find-repo] recommendations saved user=${user.username}`);
-
-  return res.json({
-    success: true,
-    matchedRepositories: parsed.matchedRepositories,
-    cached: false,
-    generatedAt: user.repoRecommendationsGeneratedAt,
-  });
+  await User.updateOne(
+    { _id: userId, repoRecommendationsStatus: statusAtStart },
+    { $set: { repoRecommendationsStatus: "idle" } },
+  );
 }
 
-router.get(
-  "/recommendations",
+function logErrorChain(label: string, error: any) {
+  console.error(`[find-repo:${label}] ── ERROR ──────────────────────`);
+  console.error(error?.response?.data || error?.message || error);
+}
+
+router.post(
+  "/recommendations/stream",
   requireAuth,
   async (req: AuthRequest, res: Response) => {
-    try {
-      const user = await User.findById(req.userId);
+    const user = await User.findById(req.userId);
+    if (!user)
+      return res.status(404).json({ success: false, error: "User not found" });
 
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          error: "User not found",
-        });
-      }
+    if (!user.developerProfile) {
+      return res.status(400).json({
+        success: false,
+        code: "DEVELOPER_PROFILE_REQUIRED",
+        error: "Build your developer profile first",
+      });
+    }
 
-      const refresh = req.query.refresh === "true";
-
-      console.log(
-        `[find-repo] request user=${user.username} refresh=${refresh}`,
+    // Atomically claim the run so a double-click can't start two sessions.
+    const claimedUser = await User.findOneAndUpdate(
+      {
+        _id: user._id,
+        repoRecommendationsStatus: {
+          $in: ["idle", "failed", undefined, null],
+        },
+      } as any,
+      {
+        $set: {
+          repoRecommendationsStatus: "running",
+        },
+        $unset: {
+          repoRecommendationsLastError: 1,
+        },
+      },
+      {
+        returnDocument: "after",
+      },
+    );
+    if (!claimedUser) {
+      const currentUser = await User.findById(user._id).select(
+        "repoRecommendationsStatus",
       );
 
-      /**
-       * Return existing recommendations unless an explicit refresh
-       * was requested.
-       */
-      if (!refresh && user.repoRecommendations?.length) {
-        console.log(
-          `[find-repo] returning cached recommendations user=${user.username}`,
-        );
-
-        return res.json({
-          success: true,
-          matchedRepositories: user.repoRecommendations,
-          cached: true,
-          generatedAt: user.repoRecommendationsGeneratedAt,
-        });
-      }
-
-      /**
-       * The recommender needs the developer profile as input.
-       */
-      if (!user.developerProfile) {
-        return res.status(400).json({
-          success: false,
-          code: "DEVELOPER_PROFILE_REQUIRED",
-          error: "Developer profile not found",
-        });
-      }
-
-      /**
-       * Atomically claim the recommendation run.
-       *
-       * This replaces the old read -> check -> save sequence.
-       *
-       * With this query, only one concurrent request can transition:
-       *
-       *     idle -> running
-       *
-       * Every other concurrent request gets null and receives 409.
-       */
-      console.log(
-        `[find-repo] attempting to claim recommendation run user=${user.username}`,
-      );
-
-      const claimedUser = await User.findOneAndUpdate(
-        {
-          _id: user._id,
-          repoRecommendationsStatus: "idle",
-        },
-        {
-          $set: {
-            repoRecommendationsStatus: "running",
-          },
-        },
-        {
-          new: true,
-        },
-      );
-
-      /**
-       * Another request already owns the recommendation run.
-       */
-      if (!claimedUser) {
-        const currentUser = await User.findById(user._id);
-
-        if (!currentUser) {
-          return res.status(404).json({
-            success: false,
-            error: "User not found",
-          });
-        }
-
+      if (currentUser?.repoRecommendationsStatus === "running") {
         return res.status(409).json({
           success: false,
-          status: currentUser.repoRecommendationsStatus,
-          sessionId: currentUser.repoRecommendationsSessionId,
-          message: "Repo recommendation is already in progress",
+          error: "A repo match run is already in progress",
         });
       }
 
-      console.log(
-        `[find-repo] generating recommendations user=${claimedUser.username}`,
-      );
-
-      /**
-       * Run the agent while the atomic lock is held.
-       *
-       * Any thrown error releases the lock before returning 500.
-       */
-      try {
-        const result = await runAgent({
-          agentName: REPO_RECOMMENDER_AGENT_NAME,
-          label: "find-repo",
-          prompt: `Developer profile JSON:\n${JSON.stringify(
-            claimedUser.developerProfile,
-          )}\n\nFind matching repositories for this developer.`,
+      if (currentUser?.repoRecommendationsStatus === "auth_required") {
+        return res.status(409).json({
+          success: false,
+          error: "GitHub authorization is required to continue",
         });
-
-        return await handleAgentResult(claimedUser, result, res);
-      } catch (error) {
-        await releaseRepoRecommendationLock(claimedUser.id);
-        throw error;
       }
-    } catch (error: any) {
-      console.error(
-        "[find-repo] failed:",
-        error?.response?.data || error?.message || error,
-      );
 
-      return res.status(500).json({
+      return res.status(409).json({
         success: false,
-        error: "Failed to generate repo recommendations",
+        error: "Unable to start repo matching",
       });
+    }
+
+    const heartbeat = openSse(res);
+
+    try {
+      // NOTE: HttpResponsePromise resolves to a wrapper — the actual
+      // session object is under `.data`, same as the profile route.
+      const sessionResponse = await trueforge.sessions.create({
+        agent: { name: REPO_RECOMMENDER_AGENT_NAME },
+      });
+
+      const session = sessionResponse.data;
+
+      claimedUser.repoRecommendationsSessionId = session.id;
+      await claimedUser.save();
+
+      await streamAgentTurn<RepoRecommendations>(
+        res,
+        session.id,
+        [
+          {
+            type: "user.message",
+            content: `Developer profile JSON:\n${JSON.stringify(
+              claimedUser.developerProfile,
+            )}\n\nFind matching repositories for this developer.`,
+          },
+        ],
+        "oss-stream",
+        TOOL_MEANINGS,
+        validateRecommendations,
+        {
+          onAuthRequired: async () => {
+            await User.updateOne(
+              { _id: claimedUser.id },
+              { $set: { repoRecommendationsStatus: "auth_required" } },
+            );
+          },
+          onError: (message) =>
+            markRepoRecommendationFailed(claimedUser.id, message),
+        },
+      );
+    } catch (error: any) {
+      logErrorChain("stream", error);
+
+      const message =
+        error?.response?.data?.message ??
+        error?.response?.data?.error ??
+        error?.message ??
+        "Failed to find repo matches";
+
+      res.write(
+        `data: ${JSON.stringify({
+          type: "error",
+          message,
+        })}\n\n`,
+      );
+
+      await markRepoRecommendationFailed(claimedUser.id, message);
+    } finally {
+      clearInterval(heartbeat);
+      res.end();
+
+      // claimedUser.repoRecommendationsStatus was just set to "running" by
+      // the atomic claim above. If it's still "running" here, neither
+      // onAuthRequired nor the catch block fired — i.e. the turn completed
+      // normally and we're only waiting on the browser's /commit call.
+      // Release the lock so a lost commit can't block future runs.
+      await releaseLockIfUnchanged(claimedUser.id, "running");
     }
   },
 );
 
 router.post(
-  "/recommendations/resume",
+  "/recommendations/stream/resume",
   requireAuth,
   async (req: AuthRequest, res: Response) => {
-    try {
-      const user = await User.findById(req.userId);
-
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          error: "User not found",
-        });
-      }
-
-      /**
-       * Resume is only valid when a previous agent run paused
-       * specifically for authorization.
-       */
-      if (
-        !user.repoRecommendationsSessionId ||
-        user.repoRecommendationsStatus !== "auth_required"
-      ) {
-        return res.status(400).json({
-          success: false,
-          error: "No pending GitHub authorization",
-        });
-      }
-
-      const sessionId = user.repoRecommendationsSessionId;
-
-      console.log(
-        `[find-repo] resuming user=${user.username} session=${sessionId}`,
-      );
-
-      /**
-       * Move auth_required -> running before resuming.
-       *
-       * This prevents multiple resume requests from attempting
-       * to continue the same session simultaneously.
-       */
-      user.repoRecommendationsStatus = "running";
-      await user.save();
-
-      try {
-        const result = await resumeAgent({
-          sessionId,
-          label: "find-repo-resume",
-        });
-
-        return await handleAgentResult(user, result, res);
-      } catch (error) {
-        /**
-         * If resume fails, make sure the user is not permanently
-         * stuck in "running".
-         */
-        await releaseRepoRecommendationLock(user.id);
-        throw error;
-      }
-    } catch (error: any) {
-      console.error(
-        "[find-repo] resume failed:",
-        error?.response?.data || error?.message || error,
-      );
-
-      return res.status(500).json({
-        success: false,
-        error: "Failed to resume recommendations",
-      });
+    const user = await User.findById(req.userId);
+    if (!user)
+      return res.status(404).json({ success: false, error: "User not found" });
+    if (!user.repoRecommendationsSessionId) {
+      return res
+        .status(400)
+        .json({ success: false, error: "No pending GitHub authorization" });
     }
+
+    const statusAtStart = user.repoRecommendationsStatus ?? "auth_required";
+    const heartbeat = openSse(res);
+
+    try {
+      await streamAgentTurn<RepoRecommendations>(
+        res,
+        user.repoRecommendationsSessionId,
+        [],
+        "oss-resume",
+        TOOL_MEANINGS,
+        validateRecommendations,
+        {
+          onAuthRequired: async () => {
+            await User.updateOne(
+              { _id: user.id },
+              { $set: { repoRecommendationsStatus: "auth_required" } },
+            );
+          },
+          onError: (message) => markRepoRecommendationFailed(user.id, message),
+        },
+      );
+    } catch (error: any) {
+      logErrorChain("resume", error);
+      res.write(
+        `data: ${JSON.stringify({ type: "error", message: "Failed to resume repo matching" })}\n\n`,
+      );
+      await markRepoRecommendationFailed(
+        user.id,
+        "Failed to resume repo matching",
+      );
+    } finally {
+      clearInterval(heartbeat);
+      res.end();
+
+      // Same safety net: if the resumed turn completed normally (status
+      // never moved away from whatever it was when we started resuming),
+      // release the lock instead of leaving it stuck waiting on a /commit
+      // call that may never come.
+      await releaseLockIfUnchanged(user.id, statusAtStart);
+    }
+  },
+);
+
+/**
+ * Called by the client right after it receives the `done` SSE event, same
+ * commit pattern as the profile agent.
+ */
+router.post(
+  "/recommendations/commit",
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    const user = await User.findById(req.userId);
+    if (!user)
+      return res.status(404).json({ success: false, error: "User not found" });
+
+    const { data, raw } = req.body as {
+      data: RepoRecommendations;
+      raw: string;
+    };
+
+    if (!validateRecommendations(data)) {
+      await releaseRepoRecommendationLock(user.id);
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid recommendations payload" });
+    }
+
+    user.repoRecommendations = data.matchedRepositories;
+    user.repoRecommendationsRaw = raw;
+    user.repoRecommendationsParseFailed = false;
+    user.repoRecommendationsGeneratedAt = new Date();
+    user.repoRecommendationsSessionId = undefined;
+    user.repoRecommendationsStatus = "idle";
+    user.repoRecommendationsLastError = undefined;
+    await user.save();
+
+    return res.json({
+      success: true,
+      generatedAt: user.repoRecommendationsGeneratedAt,
+    });
+  },
+);
+
+// Page-load fetch of whatever's cached.
+router.get(
+  "/recommendations",
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    const user = await User.findById(req.userId);
+    if (!user)
+      return res.status(404).json({ success: false, error: "User not found" });
+
+    return res.json({
+      success: true,
+      matchedRepositories: user.repoRecommendations ?? null,
+      cached: Boolean(user.repoRecommendations?.length),
+      generatedAt: user.repoRecommendationsGeneratedAt ?? null,
+    });
   },
 );
 

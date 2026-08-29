@@ -1,9 +1,8 @@
 import { Router, Response } from "express";
 import User from "../models/User";
 import { requireAuth, AuthRequest } from "../middleware/auth";
-import { DEV_PROFILE_AGENT_NAME } from "../services/agentClient";
-import { runAgent, resumeAgent, AgentRunResult } from "../services/agentRunner";
-import { parseAgentJson } from "../utils/agentResponseToJson";
+import { DEV_PROFILE_AGENT_NAME, trueforge } from "../services/agentClient";
+import { openSse, streamAgentTurn, ToolMeaning } from "../services/agentStream";
 
 const router = Router();
 
@@ -29,192 +28,292 @@ export interface DeveloperProfile {
   funInsights: string[];
 }
 
+const EXPERIENCE_LEVELS = [
+  "Beginner",
+  "Early Intermediate",
+  "Intermediate",
+  "Advanced",
+] as const;
+
 /**
- * Shared handling for whatever runAgent/resumeAgent returns: either persist
- * the finished profile, or persist the paused session id + status and tell
- * the client where to send the user to authorize.
+ * Runtime shape guard for browser-supplied profile JSON before it's ever
+ * assigned to the user document. Deliberately conservative: checks presence
+ * and top-level types, not deep validation of every array element, since the
+ * goal is to reject malformed/garbage payloads, not fully re-derive a schema.
  */
-async function handleAgentResult(
-  user: InstanceType<typeof User>,
-  result: AgentRunResult,
-  res: Response,
-) {
-  if (result.status === "auth_required") {
-    user.developerProfileSessionId = result.sessionId;
-    user.developerProfileStatus = "auth_required";
+function isValidDeveloperProfile(value: unknown): value is DeveloperProfile {
+  if (!value || typeof value !== "object") return false;
+  const p = value as Record<string, unknown>;
 
-    await user.save();
+  const isStringArray = (v: unknown): v is string[] =>
+    Array.isArray(v) && v.every((item) => typeof item === "string");
 
-    console.log(
-      `[dev-profile] auth required user=${user.username} session=${result.sessionId}`,
+  const isTechConfidenceArray = (v: unknown): v is TechConfidence[] =>
+    Array.isArray(v) &&
+    v.every(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        typeof (item as Record<string, unknown>).name === "string" &&
+        typeof (item as Record<string, unknown>).confidence === "number",
     );
 
-    return res.status(202).json({
-      success: false,
-      status: "auth_required",
-      sessionId: result.sessionId,
-      authUrls: result.authUrls,
-    });
-  }
-
-  const profile = parseAgentJson<DeveloperProfile>(result.text);
-
-  if (!profile) {
-    console.error(`[dev-profile] invalid JSON returned by agent`);
-
-    user.developerProfileStatus = "idle";
-    user.developerProfileSessionId = undefined;
-    await user.save();
-
-    return res.status(500).json({
-      success: false,
-      error: "Agent returned invalid profile JSON",
-      raw: result.text,
-    });
-  }
-
-  user.developerProfile = profile as any;
-  user.developerProfileRaw = result.text;
-  user.developerProfileParseFailed = false;
-  user.developerProfileGeneratedAt = new Date();
-
-  user.developerProfileSessionId = undefined;
-  user.developerProfileStatus = "idle";
-
-  await user.save();
-
-  console.log(`[dev-profile] profile saved user=${user.username}`);
-
-  return res.json({
-    success: true,
-    profile,
-    cached: false,
-    generatedAt: user.developerProfileGeneratedAt,
-  });
+  return (
+    typeof p.builderArchetype === "string" &&
+    typeof p.developerType === "string" &&
+    typeof p.summary === "string" &&
+    typeof p.githubVibe === "string" &&
+    EXPERIENCE_LEVELS.includes(p.experienceLevel as any) &&
+    isTechConfidenceArray(p.strongestTechnologies) &&
+    isStringArray(p.strengths) &&
+    isStringArray(p.engineeringPatterns) &&
+    isStringArray(p.contributionAreas) &&
+    isStringArray(p.funInsights)
+  );
 }
 
-router.get("/profile", requireAuth, async (req: AuthRequest, res: Response) => {
-  try {
-    const user = await User.findById(req.userId);
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        error: "User not found",
-      });
-    }
-
-    const refresh = req.query.refresh === "true";
-
-    console.log(
-      `[dev-profile] request user=${user.username} refresh=${refresh}`,
-    );
-
-    if (!refresh && user.developerProfile) {
-      console.log(
-        `[dev-profile] returning cached profile user=${user.username}`,
-      );
-
-      return res.json({
-        success: true,
-        profile: user.developerProfile,
-        cached: true,
-        generatedAt: user.developerProfileGeneratedAt,
-      });
-    }
-
-    if (
-      user.developerProfileStatus === "running" ||
-      user.developerProfileStatus === "auth_required"
-    ) {
-      return res.status(409).json({
-        success: false,
-        status: user.developerProfileStatus,
-        sessionId: user.developerProfileSessionId,
-        message: "Developer profile analysis is already in progress",
-      });
-    }
-
-    console.log(`[dev-profile] generating profile user=${user.username}`);
-
-    user.developerProfileStatus = "running";
-    await user.save();
-
-    // GitHub auth is handled per-session by TrueForge's own MCP OAuth flow
-    // (mcp.auth_required -> authUrl -> resume), not by forwarding a stored
-    // access token. See handleAgentResult for the auth_required branch.
-    const result = await runAgent({
-      agentName: DEV_PROFILE_AGENT_NAME,
-      label: "dev-profile",
-      prompt:
-        "Analyze the authenticated GitHub developer and return the developer profile.",
-    });
-
-    return await handleAgentResult(user, result, res);
-  } catch (error: any) {
-    console.error(
-      "[dev-profile] failed:",
-      error?.response?.data || error?.message || error,
-    );
-
-    return res.status(500).json({
-      success: false,
-      error: "Failed to analyze GitHub profile",
-    });
-  }
-});
-
 /**
- * Call after the user completes the GitHub OAuth flow for a session that
- * previously paused on mcp.auth_required. Resumes with empty input per
- * TrueForge's docs — no user.message on the resuming turn.
+ * Human-facing meaning for each MCP tool the developer-profile-agent is
+ * allowed to call. Keep in sync with its `enableTools` list.
  */
+const TOOL_MEANINGS: Record<string, ToolMeaning> = {
+  get_me: {
+    label: "Confirming your identity",
+    description: "Reading which GitHub account authorized this session",
+  },
+  search_repositories: {
+    label: "Scanning your repositories",
+    description:
+      "Pulling your public repos to find real signal, not just names",
+  },
+  list_commits: {
+    label: "Sampling commit history",
+    description: "Reading recent commits to see how you actually work",
+  },
+  search_code: {
+    label: "Reading code patterns",
+    description: "Looking inside files for language and pattern clues",
+  },
+};
+
+async function markProfileFailed(userId: string, message: string) {
+  await User.updateOne(
+    { _id: userId },
+    {
+      $set: {
+        developerProfileStatus: "failed",
+        developerProfileLastError: message,
+      },
+    },
+  );
+}
+
+function logErrorChain(label: string, error: any) {
+  console.error(`[dev-profile:${label}] ── ERROR ──────────────────────`);
+  let depth = 0;
+  let current = error;
+  while (current && depth < 6) {
+    console.error(
+      `[dev-profile:${label}] depth=${depth}`,
+      `name=${current?.name}`,
+      `code=${current?.code}`,
+      `message=${current?.message}`,
+    );
+    current = current?.cause;
+    depth++;
+  }
+  console.error(`[dev-profile:${label}] full error:`, error);
+}
+
 router.post(
-  "/profile/resume",
+  "/profile/stream",
   requireAuth,
   async (req: AuthRequest, res: Response) => {
+    const user = await User.findById(req.userId);
+    if (!user)
+      return res.status(404).json({ success: false, error: "User not found" });
+
+    const heartbeat = openSse(res);
+
     try {
-      const user = await User.findById(req.userId);
+      user.developerProfileStatus = "running";
+      await user.save();
 
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          error: "User not found",
-        });
-      }
+      // Fresh session per generation, so a re-run isn't polluted by the last
+      // run's history or a half-finished tool call.
+      // NOTE: HttpResponsePromise resolves DIRECTLY to the value — there is
+      // no `.data` wrapper. Destructuring `.data` here previously produced
+      // `undefined`, which was the root cause of the
+      // "Expected object. Received undefined" crash.
 
-      if (
-        !user.developerProfileSessionId ||
-        user.developerProfileStatus !== "auth_required"
-      ) {
-        return res.status(400).json({
-          success: false,
-          error: "No pending GitHub authorization",
-        });
-      }
-
-      console.log(
-        `[dev-profile] resuming user=${user.username} session=${user.developerProfileSessionId}`,
-      );
-
-      const result = await resumeAgent({
-        sessionId: user.developerProfileSessionId,
-        label: "dev-profile-resume",
+      const sessionResponse = await trueforge.sessions.create({
+        agent: { name: DEV_PROFILE_AGENT_NAME },
       });
 
-      return await handleAgentResult(user, result, res);
+      const session = sessionResponse.data;
+      console.log("CREATED SESSION:", JSON.stringify(session, null, 2));
+
+      user.developerProfileSessionId = session.id;
+
+      await user.save();
+
+      await streamAgentTurn<DeveloperProfile>(
+        res,
+        session.id,
+        [
+          {
+            type: "user.message",
+            content:
+              "Analyze the authenticated GitHub developer and return the developer profile.",
+          },
+        ],
+        "profile-stream",
+        TOOL_MEANINGS,
+        undefined,
+        {
+          onAuthRequired: async () => {
+            await User.updateOne(
+              { _id: user.id },
+              { $set: { developerProfileStatus: "auth_required" } },
+            );
+          },
+          onError: (message) => markProfileFailed(user.id, message),
+        },
+      );
     } catch (error: any) {
-      console.error(
-        "[dev-profile] resume failed:",
-        error?.response?.data || error?.message || error,
+      logErrorChain("stream", error);
+      res.write(
+        `data: ${JSON.stringify({ type: "error", message: "Failed to analyze GitHub profile" })}\n\n`,
       );
-
-      return res.status(500).json({
-        success: false,
-        error: "Failed to resume profile analysis",
-      });
+      await markProfileFailed(user.id, "Failed to analyze GitHub profile");
+    } finally {
+      clearInterval(heartbeat);
+      res.end();
     }
   },
 );
+
+router.post(
+  "/profile/stream/resume",
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    // Atomically claim the resume: only one concurrent request can move a
+    // session out of "auth_required" into "running". Without this, two
+    // requests can both read a truthy developerProfileSessionId and both
+    // start a turn on the same session.
+    const claimed = await User.findOneAndUpdate(
+      {
+        _id: req.userId,
+        developerProfileSessionId: { $exists: true, $ne: null },
+        developerProfileStatus: "auth_required",
+      },
+      { $set: { developerProfileStatus: "running" } },
+      { new: true },
+    );
+
+    if (!claimed) {
+      // Distinguish "user doesn't exist" from "nothing pending to resume"
+      // so the client gets an accurate error either way.
+      const exists = await User.exists({ _id: req.userId });
+      if (!exists) {
+        return res
+          .status(404)
+          .json({ success: false, error: "User not found" });
+      }
+      return res.status(400).json({
+        success: false,
+        error: "No pending GitHub authorization",
+      });
+    }
+
+    const user = claimed;
+    const heartbeat = openSse(res);
+
+    try {
+      // Per TrueForge docs: after mcp.auth_required, resume with empty input.
+      await streamAgentTurn<DeveloperProfile>(
+        res,
+        user.developerProfileSessionId!,
+        [],
+        "profile-resume",
+        TOOL_MEANINGS,
+        undefined,
+        {
+          onAuthRequired: async () => {
+            await User.updateOne(
+              { _id: user.id },
+              { $set: { developerProfileStatus: "auth_required" } },
+            );
+          },
+          onError: (message) => markProfileFailed(user.id, message),
+        },
+      );
+    } catch (error: any) {
+      logErrorChain("resume", error);
+      res.write(
+        `data: ${JSON.stringify({ type: "error", message: "Failed to resume profile analysis" })}\n\n`,
+      );
+      await markProfileFailed(user.id, "Failed to resume profile analysis");
+    } finally {
+      clearInterval(heartbeat);
+      res.end();
+    }
+  },
+);
+
+/**
+ * Called by the client right after it receives the `done` SSE event — the
+ * browser already has the parsed profile, so this just persists it instead
+ * of re-parsing raw text server-side a second time.
+ */
+router.post(
+  "/profile/commit",
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    const user = await User.findById(req.userId);
+    if (!user)
+      return res.status(404).json({ success: false, error: "User not found" });
+
+    const { profile, raw } = req.body as {
+      profile: unknown;
+      raw: string;
+    };
+
+    if (!isValidDeveloperProfile(profile)) {
+      return res.status(400).json({
+        success: false,
+        error: "Malformed developer profile payload",
+      });
+    }
+
+    user.developerProfile = profile;
+    user.developerProfileRaw = raw;
+    user.developerProfileParseFailed = false;
+    user.developerProfileGeneratedAt = new Date();
+    user.developerProfileSessionId = undefined;
+    user.developerProfileStatus = "idle";
+    user.developerProfileLastError = undefined;
+    await user.save();
+
+    return res.json({
+      success: true,
+      generatedAt: user.developerProfileGeneratedAt,
+    });
+  },
+);
+
+// Page-load fetch of whatever's cached.
+router.get("/profile", requireAuth, async (req: AuthRequest, res: Response) => {
+  const user = await User.findById(req.userId);
+  if (!user)
+    return res.status(404).json({ success: false, error: "User not found" });
+
+  return res.json({
+    success: true,
+    profile: user.developerProfile ?? null,
+    cached: Boolean(user.developerProfile),
+    generatedAt: user.developerProfileGeneratedAt ?? null,
+  });
+});
 
 export default router;
