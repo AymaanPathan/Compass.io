@@ -10,6 +10,7 @@ import {
   type AuthUrl,
   type StepEvent,
   type StepNode,
+  type PendingQuestion,
 } from "../utils/agentStream";
 import { parsePartialJson } from "../utils/partialJson";
 import type { RootState } from "./store";
@@ -36,6 +37,7 @@ export type AgentRunStatus =
   | "connecting"
   | "running"
   | "auth_required"
+  | "question_required"
   | "succeeded"
   | "failed";
 
@@ -46,6 +48,7 @@ interface RecommendationsState {
   status: AgentRunStatus;
   error: string | null;
   authUrls: AuthUrl[];
+  pendingQuestion: PendingQuestion | null;
   generatedAt: string | null;
   cached: boolean;
   rawBuffer: string;
@@ -58,6 +61,7 @@ const initialState: RecommendationsState = {
   status: "idle",
   error: null,
   authUrls: [],
+  pendingQuestion: null,
   generatedAt: null,
   cached: false,
   rawBuffer: "",
@@ -87,6 +91,12 @@ async function runStream(
 
   if (result.kind === "error") return { error: result.message };
   if (result.kind === "auth_required") return { authUrls: result.authUrls };
+  if (result.kind === "question_required") {
+    // The repo recommender flow doesn't handle mid-run questions today —
+    // surface it as a failure rather than silently hanging, so the UI's
+    // FailedCard/retry path picks it up.
+    return { error: "The agent asked a question this flow can't answer yet." };
+  }
   return { payload: result.data, raw: result.raw };
 }
 
@@ -168,6 +178,7 @@ const recommendationsSlice = createSlice({
           status: state.status,
           error: state.error,
           authUrls: state.authUrls,
+          pendingQuestion: state.pendingQuestion,
         },
         action.payload,
       );
@@ -175,6 +186,7 @@ const recommendationsSlice = createSlice({
       state.status = next.status;
       state.error = next.error;
       state.authUrls = next.authUrls;
+      state.pendingQuestion = next.pendingQuestion;
     },
     textDeltaReceived(state, action: PayloadAction<string>) {
       state.rawBuffer += action.payload;
@@ -192,6 +204,7 @@ const recommendationsSlice = createSlice({
       state.rawBuffer = "";
       state.error = null;
       state.authUrls = [];
+      state.pendingQuestion = null;
     },
   },
   extraReducers: (builder) => {

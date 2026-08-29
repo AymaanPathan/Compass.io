@@ -2,7 +2,7 @@ import { Response } from "express";
 import { trueforge } from "./agentClient";
 import { TurnStreamingEvent } from "truefoundry-gateway-sdk/agents";
 
-// ---------- Types (was utils/agentEvents.ts) ----------
+// ---------- Types ----------
 
 export type StepEvent =
   | { type: "turn_start"; turnId: string }
@@ -35,6 +35,14 @@ export type StepEvent =
       type: "auth_required";
       mcpServers: { id: string; name: string; authUrl: string }[];
     }
+  // NEW: the agent called ask_user_question and the turn is paused until we
+  // submit an answer for this specific toolCallId.
+  | {
+      type: "question_required";
+      toolCallId: string;
+      question: string;
+      options: string[];
+    }
   | {
       type: "turn_done";
       status: "done" | "cancelled" | "error";
@@ -46,6 +54,12 @@ export interface AuthUrl {
   id: string;
   name: string;
   authUrl: string;
+}
+
+export interface PendingQuestion {
+  toolCallId: string;
+  question: string;
+  options: string[];
 }
 
 export interface NormalizedToolCall {
@@ -61,7 +75,7 @@ export interface ToolMeaning {
   description: string;
 }
 
-// ---------- SSE plumbing (was services/agentStreaming.ts) ----------
+// ---------- SSE plumbing ----------
 
 function sse(res: Response, event: StepEvent) {
   res.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -78,12 +92,66 @@ export function openSse(res: Response) {
 }
 
 /**
- * The `<T>` here doesn't drive any runtime parsing — this function only
- * streams raw StepEvents over SSE. It exists so callers can annotate what
- * shape they *expect* the final agent output to be (e.g. `DeveloperProfile`)
- * for their own downstream typing/documentation, without this function
- * needing to know or validate that shape.
+ * ⚠️ VERIFY against the real SDK: this assumes that when the model calls the
+ * built-in `ask_user_question` tool (enabled via manifest.config.askUserQuestions),
+ * the turn ends in a non-terminal state (e.g. "requires_action") and
+ * `event.state.requiredActions` looks like an OpenAI-Assistants-style
+ * submit_tool_outputs payload:
+ *
+ *   {
+ *     type: "submit_tool_outputs",
+ *     toolCalls: [{ id: "call_123", name: "ask_user_question", arguments: "{...}" }]
+ *   }
+ *
+ * If your SDK's actual shape differs, only this function needs to change —
+ * everything downstream (routes, frontend) just consumes the normalized
+ * PendingQuestion it returns.
  */
+function extractPendingQuestion(requiredActions: any): PendingQuestion | null {
+  if (!requiredActions) return null;
+
+  const toolCalls =
+    requiredActions.toolCalls ?? requiredActions.tool_calls ?? [];
+
+  for (const tc of toolCalls) {
+    const name = tc.name ?? tc.function?.name;
+    if (name !== "ask_user_question") continue;
+
+    let args: any = {};
+    try {
+      const raw = tc.arguments ?? tc.function?.arguments;
+      args = typeof raw === "string" ? JSON.parse(raw) : (raw ?? {});
+    } catch {
+      args = {};
+    }
+
+    return {
+      toolCallId: tc.id,
+      question: args.question ?? "",
+      options: Array.isArray(args.options) ? args.options : [],
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Builds the `input` array to resume a paused turn after the user answered
+ * a question. ⚠️ VERIFY the exact input item shape the SDK expects for
+ * submitting a tool result — this mirrors the `tool.response` event shape
+ * (toolCallId + string content) since that's the only tool-result-shaped
+ * contract visible elsewhere in this codebase.
+ */
+export function buildAnswerInput(toolCallId: string, answer: string) {
+  return [
+    {
+      type: "tool_result",
+      toolCallId,
+      content: JSON.stringify({ answer }),
+    },
+  ];
+}
+
 export async function streamAgentTurn<T = unknown>(
   res: Response,
   sessionId: string,
@@ -93,11 +161,11 @@ export async function streamAgentTurn<T = unknown>(
   resultValidator: ((value: unknown) => value is T) | undefined,
   hooks: {
     onAuthRequired: () => Promise<void>;
+    onQuestionRequired?: (question: PendingQuestion) => Promise<void>;
     onError: (message: string) => Promise<void>;
   },
 ): Promise<void> {
   try {
-    // HttpResponsePromise resolves directly to the value — no `.data` wrapper.
     const stream = await trueforge.sessions.createTurnStream(sessionId, {
       input,
     } as any);
@@ -196,9 +264,32 @@ export async function streamAgentTurn<T = unknown>(
 
         case "turn.done": {
           const state = event.state as any;
+          const status = state?.status ?? "done";
+
+          // Turn paused because the agent is waiting on ask_user_question.
+          if (
+            status !== "done" &&
+            status !== "cancelled" &&
+            status !== "error"
+          ) {
+            const pending = extractPendingQuestion(state?.requiredActions);
+            if (pending) {
+              sse(res, {
+                type: "question_required",
+                toolCallId: pending.toolCallId,
+                question: pending.question,
+                options: pending.options,
+              });
+              if (hooks.onQuestionRequired) {
+                await hooks.onQuestionRequired(pending);
+              }
+              return; // pause here, exactly like auth_required
+            }
+          }
+
           sse(res, {
             type: "turn_done",
-            status: state?.status ?? "done",
+            status,
             requiredActions: state?.requiredActions,
           });
           break;

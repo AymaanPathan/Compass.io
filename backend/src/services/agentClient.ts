@@ -10,6 +10,7 @@ export const REPO_RECOMMENDER_AGENT_NAME = "repo-recommender-agent";
 export const ISSUE_EXPLAINER_AGENT_NAME = "issue-explainer-agent";
 export const SOLVE_APPROACH_AGENT_NAME = "solve-approach-agent";
 export const BOUNDED_SOLVER_AGENT_NAME = "bounded-solver";
+export const ISSUE_FINDER_AGENT_NAME = "issue-finder-agent";
 
 export const OSS_AGENT_NAME = REPO_RECOMMENDER_AGENT_NAME;
 export const OSS_ISSUES_AGENT_NAME = ISSUE_EXPLAINER_AGENT_NAME;

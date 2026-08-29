@@ -1,11 +1,12 @@
 // client/src/lib/agentStream.ts
-// Consolidated: was split across utils/agentEvents.ts + store/agentStream.ts +
-// hooks/useAgentStep.ts. The `useAgentSteps` hook itself was dropped — it's
-// unused dead code now that Redux (profileSlice/reposSlice) owns this via
-// consumeAgentStream + applyEvent directly. Everything else is one concern:
-// "how do we read an SSE agent stream and fold it into UI state."
+// Shared by recommendationsSlice AND issueFinderSlice. Extended with:
+//  - `question_required` event/state, mirroring how `auth_required` already
+//    pauses the stream.
+//  - Optional POST body support in consumeAgentStream (the repo recommender
+//    stream takes no body; the issue finder needs to send selectedRepository /
+//    the answer being submitted).
 
-// ---------- Types (was utils/agentEvents.ts) ----------
+// ---------- Types ----------
 
 export type StepEvent =
   | { type: "turn_start"; turnId: string }
@@ -39,6 +40,12 @@ export type StepEvent =
       mcpServers: { id: string; name: string; authUrl: string }[];
     }
   | {
+      type: "question_required";
+      toolCallId: string;
+      question: string;
+      options: string[];
+    }
+  | {
       type: "turn_done";
       status: "done" | "cancelled" | "error";
       requiredActions?: unknown;
@@ -51,6 +58,12 @@ export interface AuthUrl {
   authUrl: string;
 }
 
+export interface PendingQuestion {
+  toolCallId: string;
+  question: string;
+  options: string[];
+}
+
 export interface NormalizedToolCall {
   id: string;
   name: string;
@@ -59,7 +72,7 @@ export interface NormalizedToolCall {
   meaning?: { label: string; description: string };
 }
 
-// ---------- Step tree shape (was hooks/useAgentStep.ts) ----------
+// ---------- Step tree shape ----------
 
 export type StepNode =
   | { kind: "reasoning"; id: string; content: string; done: boolean }
@@ -89,16 +102,16 @@ export interface StepState {
     | "connecting"
     | "running"
     | "auth_required"
+    | "question_required"
     | "succeeded"
     | "failed";
   error: string | null;
   authUrls: AuthUrl[];
+  pendingQuestion: PendingQuestion | null;
 }
 
 /**
- * Folds a single StepEvent into StepState. Used directly by Redux slice
- * reducers (stepEventReceived) — this is the one place the "how do tool
- * calls/reasoning/threads accumulate" logic lives.
+ * Folds a single StepEvent into StepState.
  */
 export function applyEvent(prev: StepState, e: StepEvent): StepState {
   const steps = [...prev.steps];
@@ -179,11 +192,39 @@ export function applyEvent(prev: StepState, e: StepEvent): StepState {
       return { ...prev, steps };
     }
     case "auth_required":
-      return { ...prev, status: "auth_required", authUrls: e.mcpServers };
+      return {
+        ...prev,
+        status: "auth_required",
+        authUrls: e.mcpServers,
+        pendingQuestion: null,
+      };
+    case "question_required": {
+      // The ask_user_question tool call is already rendered as a running
+      // tool_call step — mark it done now that we know its "result" is
+      // pending on the user, so it doesn't look stuck.
+      const node = steps.find(
+        (s): s is Extract<StepNode, { kind: "tool_call" }> =>
+          s.kind === "tool_call" &&
+          s.name === "ask_user_question" &&
+          s.status === "running",
+      );
+      if (node) node.status = "done";
+      return {
+        ...prev,
+        steps,
+        status: "question_required",
+        pendingQuestion: {
+          toolCallId: e.toolCallId,
+          question: e.question,
+          options: e.options,
+        },
+      };
+    }
     case "turn_done":
       return {
         ...prev,
         status: e.status === "error" ? "failed" : "succeeded",
+        pendingQuestion: null,
       };
     case "error":
       return { ...prev, status: "failed", error: e.message };
@@ -192,30 +233,35 @@ export function applyEvent(prev: StepState, e: StepEvent): StepState {
   }
 }
 
-// ---------- SSE fetch/parse (was store/agentStream.ts) ----------
+// ---------- SSE fetch/parse ----------
 
 export type AgentStreamResult<T> =
   | { kind: "done"; data: T; raw: string }
   | { kind: "auth_required"; authUrls: AuthUrl[] }
+  | { kind: "question_required"; question: PendingQuestion }
   | { kind: "error"; message: string };
 
 export interface AgentStreamHandlers {
   onPhase?: (phase: string) => void;
   onEvent?: (event: StepEvent) => void;
   onAuthRequired?: (authUrls: AuthUrl[]) => void;
+  onQuestionRequired?: (question: PendingQuestion) => void;
 }
 
 const getToken = () => localStorage.getItem("accessToken");
 
 /**
  * Opens a POST'd SSE stream at `url` and dispatches parsed StepEvents to
- * `handlers.onEvent` live (drives the step tree UI via applyEvent above).
- * Separately accumulates text_delta chunks so the caller gets the final
- * parsed JSON payload once turn_done arrives.
+ * `handlers.onEvent` live. Separately accumulates text_delta chunks so the
+ * caller gets the final parsed JSON payload once turn_done arrives.
+ *
+ * `body`, when provided, is JSON-stringified and sent as the POST body
+ * (used to pass selectedRepository / question answers).
  */
 export async function consumeAgentStream<T>(
   url: string,
   handlers: AgentStreamHandlers = {},
+  body?: unknown,
 ): Promise<AgentStreamResult<T>> {
   const res = await fetch(url, {
     method: "POST",
@@ -224,13 +270,18 @@ export async function consumeAgentStream<T>(
       Authorization: `Bearer ${getToken()}`,
       "Content-Type": "application/json",
     },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
   if (!res.ok || !res.body) {
-    return {
-      kind: "error",
-      message: "Couldn't reach the agent. Please try again.",
-    };
+    let message = "Couldn't reach the agent. Please try again.";
+    try {
+      const err = await res.json();
+      message = err?.error ?? message;
+    } catch {
+      /* response wasn't JSON (likely never opened SSE) */
+    }
+    return { kind: "error", message };
   }
 
   handlers.onPhase?.("connecting");
@@ -253,6 +304,17 @@ export async function consumeAgentStream<T>(
         handlers.onAuthRequired?.(event.mcpServers);
         result = { kind: "auth_required", authUrls: event.mcpServers };
         break;
+
+      case "question_required": {
+        const question: PendingQuestion = {
+          toolCallId: event.toolCallId,
+          question: event.question,
+          options: event.options,
+        };
+        handlers.onQuestionRequired?.(question);
+        result = { kind: "question_required", question };
+        break;
+      }
 
       case "turn_done":
         if (event.status === "error") {

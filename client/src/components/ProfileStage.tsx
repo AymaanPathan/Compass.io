@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import type { DeveloperProfile } from "../types";
 import type { AuthUrl, StepNode } from "../utils/agentStream";
 import type { AgentRunStatus } from "../store/profileSlice";
-import { useNavigate } from "react-router-dom";
 
 const MONO = "'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace";
 
@@ -29,18 +28,23 @@ export default function ProfileStage({
   cached,
   onStart,
   onResume,
+  onAdvance,
 }: ProfileStageProps) {
   const traceRef = useRef<HTMLDivElement>(null);
-  const navigate = useNavigate();
-  
 
   useEffect(() => {
-    traceRef.current?.scrollTo({ top: traceRef.current.scrollHeight, behavior: "smooth" });
+    traceRef.current?.scrollTo({
+      top: traceRef.current.scrollHeight,
+      behavior: "smooth",
+    });
   }, [steps]);
 
   const isIdle = status === "idle";
   const isBusy =
-    status === "connecting" || status === "running" || status === "auth_required" || status === "failed";
+    status === "connecting" ||
+    status === "running" ||
+    status === "auth_required" ||
+    status === "failed";
   const isDone = status === "succeeded";
 
   return (
@@ -51,7 +55,10 @@ export default function ProfileStage({
         {/* Left — reasoning */}
         <section className="flex w-full max-w-[400px] shrink-0 flex-col border-r border-white/[0.08]">
           <div className="border-b border-white/[0.08] px-4 py-3">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-[#EDECEC]/50" style={{ fontFamily: MONO }}>
+            <p
+              className="text-[11px] font-medium uppercase tracking-wide text-[#EDECEC]/50"
+              style={{ fontFamily: MONO }}
+            >
               Reasoning
             </p>
           </div>
@@ -71,8 +78,12 @@ export default function ProfileStage({
 
             {steps.length > 0 && <StepTrace steps={steps} />}
 
-            {status === "auth_required" && <AuthCard authUrls={authUrls} onResume={onResume} />}
-            {status === "failed" && <FailedCard error={error} onRetry={onStart} />}
+            {status === "auth_required" && (
+              <AuthCard authUrls={authUrls} onResume={onResume} />
+            )}
+            {status === "failed" && (
+              <FailedCard error={error} onRetry={onStart} />
+            )}
           </div>
         </section>
 
@@ -80,14 +91,21 @@ export default function ProfileStage({
         <section className="relative flex min-w-0 flex-1 flex-col overflow-y-auto">
           <div className="w-full flex-1 px-10 py-8 sm:px-14">
             {isIdle && <IdleHero onStart={onStart} />}
-            {isBusy && <FormingProfile streamingProfile={streamingProfile} status={status} />}
-            {isDone && profile && <FinalProfile profile={profile} onRegenerate={onStart} />}
+            {isBusy && (
+              <FormingProfile
+                streamingProfile={streamingProfile}
+                status={status}
+              />
+            )}
+            {isDone && profile && (
+              <FinalProfile profile={profile} onRegenerate={onStart} />
+            )}
           </div>
 
           {isDone && (
             <div className="sticky bottom-0 flex justify-end border-t border-white/[0.08] bg-[#14120B] px-10 py-3.5 sm:px-14">
               <button
-                onClick={() => navigate("/recommendations")}
+                onClick={onAdvance}
                 className="inline-flex items-center gap-1.5 rounded-md bg-[#D39237] px-4 py-2 text-[13px] font-semibold text-[#14120B] transition-colors hover:bg-[#D39237]/90"
               >
                 Recommend repo
@@ -113,7 +131,13 @@ export default function ProfileStage({
 /*  Status bar                                                                */
 /* -------------------------------------------------------------------------- */
 
-function StatusBar({ status, cached }: { status: AgentRunStatus; cached: boolean }) {
+function StatusBar({
+  status,
+  cached,
+}: {
+  status: AgentRunStatus;
+  cached: boolean;
+}) {
   const map: Record<AgentRunStatus, { label: string; live: boolean }> = {
     idle: { label: "Idle", live: false },
     connecting: { label: "Connecting", live: true },
@@ -127,17 +151,25 @@ function StatusBar({ status, cached }: { status: AgentRunStatus; cached: boolean
   return (
     <div className="flex items-center justify-between border-b border-white/[0.08] px-5 py-2.5">
       <div className="flex items-center gap-2.5">
-        <p className="text-[12.5px] text-[#EDECEC]/75">Developer profile agent</p>
+        <p className="text-[12.5px] text-[#EDECEC]/75">
+          Developer profile agent
+        </p>
         <span className="flex items-center gap-1.5 text-[11.5px] text-[#EDECEC]/50">
           <span
             className={`h-1.5 w-1.5 rounded-full ${
-              status === "succeeded" ? "bg-[#D39237]" : s.live ? "bg-[#D39237]/70" : "bg-[#EDECEC]/25"
+              status === "succeeded"
+                ? "bg-[#D39237]"
+                : s.live
+                  ? "bg-[#D39237]/70"
+                  : "bg-[#EDECEC]/25"
             }`}
           />
           {s.label}
         </span>
       </div>
-      {status === "succeeded" && cached && <span className="text-[11px] text-[#EDECEC]/40">Cached</span>}
+      {status === "succeeded" && cached && (
+        <span className="text-[11px] text-[#EDECEC]/40">Cached</span>
+      )}
     </div>
   );
 }
@@ -210,9 +242,18 @@ function FormingProfile({
       </h2>
 
       <div className="mt-5 grid gap-4 border-t border-white/[0.08] pt-4 sm:grid-cols-3">
-        <PreviewField label="Developer type" value={streamingProfile?.developerType} />
-        <PreviewField label="Experience" value={streamingProfile?.experienceLevel} />
-        <PreviewField label="GitHub vibe" value={streamingProfile?.githubVibe} />
+        <PreviewField
+          label="Developer type"
+          value={streamingProfile?.developerType}
+        />
+        <PreviewField
+          label="Experience"
+          value={streamingProfile?.experienceLevel}
+        />
+        <PreviewField
+          label="GitHub vibe"
+          value={streamingProfile?.githubVibe}
+        />
       </div>
 
       <div className="mt-8 space-y-2.5">
@@ -233,7 +274,10 @@ function FormingProfile({
 function PreviewField({ label, value }: { label: string; value?: string }) {
   return (
     <div>
-      <p className="text-[10.5px] uppercase tracking-wide text-[#EDECEC]/40" style={{ fontFamily: MONO }}>
+      <p
+        className="text-[10.5px] uppercase tracking-wide text-[#EDECEC]/40"
+        style={{ fontFamily: MONO }}
+      >
         {label}
       </p>
       <p className="mt-1 min-h-[16px] text-[13px] text-[#EDECEC]/90">
@@ -247,12 +291,21 @@ function PreviewField({ label, value }: { label: string; value?: string }) {
 /*  Auth / failed cards (left pane)                                          */
 /* -------------------------------------------------------------------------- */
 
-function AuthCard({ authUrls, onResume }: { authUrls: AuthUrl[]; onResume: () => void }) {
+function AuthCard({
+  authUrls,
+  onResume,
+}: {
+  authUrls: AuthUrl[];
+  onResume: () => void;
+}) {
   return (
     <div className="mt-5 rounded-md border border-white/[0.08] p-4">
-      <p className="text-[13px] font-medium text-[#EDECEC]/95">Connect GitHub to continue</p>
+      <p className="text-[13px] font-medium text-[#EDECEC]/95">
+        Connect GitHub to continue
+      </p>
       <p className="mt-1 text-[12px] leading-relaxed text-[#EDECEC]/50">
-        Read-only OAuth grant — the agent can't read your repositories without it.
+        Read-only OAuth grant — the agent can't read your repositories without
+        it.
       </p>
       <div className="mt-3 flex flex-wrap gap-2">
         {authUrls.map((a) => (
@@ -277,10 +330,18 @@ function AuthCard({ authUrls, onResume }: { authUrls: AuthUrl[]; onResume: () =>
   );
 }
 
-function FailedCard({ error, onRetry }: { error: string | null; onRetry: () => void }) {
+function FailedCard({
+  error,
+  onRetry,
+}: {
+  error: string | null;
+  onRetry: () => void;
+}) {
   return (
     <div className="mt-5 rounded-md border border-white/[0.08] p-4">
-      <p className="text-[13px] font-medium text-[#EDECEC]/95">The agent couldn't finish this run</p>
+      <p className="text-[13px] font-medium text-[#EDECEC]/95">
+        The agent couldn't finish this run
+      </p>
       <p className="mt-1 text-[12px] leading-relaxed text-[#EDECEC]/50">
         {error ?? "Something went wrong while analyzing your GitHub profile."}
       </p>
@@ -320,7 +381,10 @@ function StepRow({ step }: { step: StepNode }) {
       <div className="border-t border-white/[0.06] pt-2 first:border-t-0 first:pt-0">
         <div className="flex items-center gap-1.5">
           <StatusDot done={step.done} />
-          <span className="text-[10.5px] uppercase tracking-wide text-[#EDECEC]/45" style={{ fontFamily: MONO }}>
+          <span
+            className="text-[10.5px] uppercase tracking-wide text-[#EDECEC]/45"
+            style={{ fontFamily: MONO }}
+          >
             Reasoning
           </span>
         </div>
@@ -336,18 +400,25 @@ function StepRow({ step }: { step: StepNode }) {
       <div className="border-t border-white/[0.06] pt-2 first:border-t-0 first:pt-0">
         <div className="flex items-center gap-1.5">
           <StatusDot done={step.status === "done"} />
-          <span className="text-[12.5px] font-medium text-[#EDECEC]/90">{step.name}</span>
+          <span className="text-[12.5px] font-medium text-[#EDECEC]/90">
+            {step.name}
+          </span>
           <span className="text-[10px] uppercase tracking-wide text-[#EDECEC]/40">
             {step.status === "done" ? "done" : "running"}
           </span>
         </div>
         {step.args !== undefined && step.args !== null && (
-          <p className="mt-1 truncate pl-3 text-[11px] text-[#EDECEC]/40" style={{ fontFamily: MONO }}>
+          <p
+            className="mt-1 truncate pl-3 text-[11px] text-[#EDECEC]/40"
+            style={{ fontFamily: MONO }}
+          >
             {truncate(safeStringify(step.args), 140)}
           </p>
         )}
         {step.result && (
-          <p className="mt-0.5 pl-3 text-[11.5px] leading-relaxed text-[#EDECEC]/50">{truncate(step.result, 220)}</p>
+          <p className="mt-0.5 pl-3 text-[11.5px] leading-relaxed text-[#EDECEC]/50">
+            {truncate(step.result, 220)}
+          </p>
         )}
       </div>
     );
@@ -360,10 +431,17 @@ function ThreadRow({ step }: { step: Extract<StepNode, { kind: "thread" }> }) {
   const [open, setOpen] = useState(true);
   return (
     <div className="border-t border-white/[0.06] pt-2 first:border-t-0 first:pt-0">
-      <button onClick={() => setOpen((o) => !o)} className="flex w-full items-center gap-1.5 text-left">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-1.5 text-left"
+      >
         <StatusDot done={step.done} />
-        <span className="text-[10.5px] uppercase tracking-wide text-[#EDECEC]/50">Sub-agent</span>
-        <span className="text-[12.5px] font-medium text-[#EDECEC]/95">{step.agentName}</span>
+        <span className="text-[10.5px] uppercase tracking-wide text-[#EDECEC]/50">
+          Sub-agent
+        </span>
+        <span className="text-[12.5px] font-medium text-[#EDECEC]/95">
+          {step.agentName}
+        </span>
         <svg
           width="8"
           height="8"
@@ -371,7 +449,13 @@ function ThreadRow({ step }: { step: Extract<StepNode, { kind: "thread" }> }) {
           fill="none"
           className={`ml-auto shrink-0 text-[#EDECEC]/35 transition-transform ${open ? "rotate-90" : ""}`}
         >
-          <path d="M2 1l4.5 3.5L2 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+          <path
+            d="M2 1l4.5 3.5L2 8"
+            stroke="currentColor"
+            strokeWidth="1.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
         </svg>
       </button>
       {open && (
@@ -388,7 +472,11 @@ function ThreadRow({ step }: { step: Extract<StepNode, { kind: "thread" }> }) {
 }
 
 function StatusDot({ done }: { done: boolean }) {
-  return <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${done ? "bg-[#EDECEC]/35" : "bg-[#D39237]"}`} />;
+  return (
+    <span
+      className={`h-1.5 w-1.5 shrink-0 rounded-full ${done ? "bg-[#EDECEC]/35" : "bg-[#D39237]"}`}
+    />
+  );
 }
 
 function truncate(text: string, max: number) {
@@ -408,7 +496,13 @@ function safeStringify(value: unknown) {
 /*  Final profile (right pane) — uses full width via a 2-col grid            */
 /* -------------------------------------------------------------------------- */
 
-function FinalProfile({ profile, onRegenerate }: { profile: DeveloperProfile; onRegenerate: () => void }) {
+function FinalProfile({
+  profile,
+  onRegenerate,
+}: {
+  profile: DeveloperProfile;
+  onRegenerate: () => void;
+}) {
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
@@ -424,8 +518,12 @@ function FinalProfile({ profile, onRegenerate }: { profile: DeveloperProfile; on
       {/* Archetype spans full width */}
       <section className="rounded-md border border-white/[0.08] p-7">
         <p className="text-[11.5px] text-[#EDECEC]/50">Builder archetype</p>
-        <h2 className="mt-1.5 text-[22px] font-medium text-[#EDECEC]">{profile.builderArchetype}</h2>
-        <p className="mt-2.5 max-w-4xl text-[13.5px] leading-relaxed text-[#EDECEC]/65">{profile.summary}</p>
+        <h2 className="mt-1.5 text-[22px] font-medium text-[#EDECEC]">
+          {profile.builderArchetype}
+        </h2>
+        <p className="mt-2.5 max-w-4xl text-[13.5px] leading-relaxed text-[#EDECEC]/65">
+          {profile.summary}
+        </p>
         <div className="mt-5 grid gap-4 border-t border-white/[0.08] pt-4 sm:grid-cols-3">
           <Field label="Developer type" value={profile.developerType} />
           <Field label="Experience level" value={profile.experienceLevel} />
@@ -436,15 +534,24 @@ function FinalProfile({ profile, onRegenerate }: { profile: DeveloperProfile; on
       {/* Two-column: technologies + lists side by side on wide screens */}
       <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
         <section className="rounded-md border border-white/[0.08] p-6">
-          <p className="text-[11.5px] text-[#EDECEC]/50">Strongest technologies</p>
+          <p className="text-[11.5px] text-[#EDECEC]/50">
+            Strongest technologies
+          </p>
           <div className="mt-3.5 space-y-2.5">
             {profile.strongestTechnologies.map((t) => (
               <div key={t.name} className="flex items-center gap-3">
-                <span className="w-28 shrink-0 text-[12.5px] text-[#EDECEC]/75">{t.name}</span>
+                <span className="w-28 shrink-0 text-[12.5px] text-[#EDECEC]/75">
+                  {t.name}
+                </span>
                 <div className="h-1 flex-1 rounded-full bg-white/[0.08]">
-                  <div className="h-1 rounded-full bg-[#D39237]" style={{ width: `${t.confidence}%` }} />
+                  <div
+                    className="h-1 rounded-full bg-[#D39237]"
+                    style={{ width: `${t.confidence}%` }}
+                  />
                 </div>
-                <span className="w-8 text-right text-[11px] text-[#EDECEC]/40">{t.confidence}%</span>
+                <span className="w-8 text-right text-[11px] text-[#EDECEC]/40">
+                  {t.confidence}%
+                </span>
               </div>
             ))}
           </div>
@@ -455,20 +562,38 @@ function FinalProfile({ profile, onRegenerate }: { profile: DeveloperProfile; on
 
       <div className="grid gap-4 sm:grid-cols-3">
         <ListCard title="Patterns" items={profile.engineeringPatterns} />
-        <ListCard title="Contribution areas" items={profile.contributionAreas} />
+        <ListCard
+          title="Contribution areas"
+          items={profile.contributionAreas}
+        />
         <ListCard title="Fun insights" items={profile.funInsights} />
       </div>
     </div>
   );
 }
 
-function Field({ label, value, italic }: { label: string; value: string; italic?: boolean }) {
+function Field({
+  label,
+  value,
+  italic,
+}: {
+  label: string;
+  value: string;
+  italic?: boolean;
+}) {
   return (
     <div>
-      <p className="text-[10.5px] uppercase tracking-wide text-[#EDECEC]/40" style={{ fontFamily: MONO }}>
+      <p
+        className="text-[10.5px] uppercase tracking-wide text-[#EDECEC]/40"
+        style={{ fontFamily: MONO }}
+      >
         {label}
       </p>
-      <p className={`mt-1 text-[13px] text-[#EDECEC]/90 ${italic ? "italic" : ""}`}>{value}</p>
+      <p
+        className={`mt-1 text-[13px] text-[#EDECEC]/90 ${italic ? "italic" : ""}`}
+      >
+        {value}
+      </p>
     </div>
   );
 }
@@ -479,7 +604,10 @@ function ListCard({ title, items }: { title: string; items: string[] }) {
       <p className="mb-2.5 text-[11.5px] text-[#EDECEC]/50">{title}</p>
       <ul className="space-y-1.5">
         {items.map((item, i) => (
-          <li key={i} className="text-[12.5px] leading-relaxed text-[#EDECEC]/75">
+          <li
+            key={i}
+            className="text-[12.5px] leading-relaxed text-[#EDECEC]/75"
+          >
             {item}
           </li>
         ))}

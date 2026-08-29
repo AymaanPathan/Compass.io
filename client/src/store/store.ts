@@ -3,6 +3,7 @@ import authReducer from "./authSlice";
 import devProfileReducer from "./profileSlice";
 import repos from "./recommendationsSlice";
 import repoKanbanReducer from "./repoKanbanSlice";
+import issueFinderReducer from "./issueFinderSlice";
 
 
 export const store = configureStore({
@@ -11,6 +12,7 @@ export const store = configureStore({
     devProfile: devProfileReducer,
     repos,
     repoKanban: repoKanbanReducer,
+    issueFinder: issueFinderReducer,
   },
 });
 
