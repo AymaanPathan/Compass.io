@@ -4,8 +4,9 @@ import { useAppDispatch, useAppSelector } from "./store/storeHook";
 import { loadCurrentUser } from "./store/authSlice";
 import Landing from "./pages/Landing";
 import Sessions from "./pages/Sessions";
-import Repositories from "./pages/Repositories";
+import Repositories from "./pages/RepositoriesKanban";
 import Issues from "./pages/Issues";
+import Recommendations from "./pages/Recommendations";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { status } = useAppSelector((s) => s.auth);
@@ -57,6 +58,14 @@ export default function App() {
           element={
             <RequireAuth>
               <Issues />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/recommendations"
+          element={
+            <RequireAuth>
+              <Recommendations />
             </RequireAuth>
           }
         />

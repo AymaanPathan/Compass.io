@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { DeveloperProfile } from "../types";
 import type { AuthUrl, StepNode } from "../utils/agentStream";
 import type { AgentRunStatus } from "../store/profileSlice";
+import { useNavigate } from "react-router-dom";
 
 const MONO = "'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace";
 
@@ -28,9 +29,10 @@ export default function ProfileStage({
   cached,
   onStart,
   onResume,
-  onAdvance,
 }: ProfileStageProps) {
   const traceRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
+  
 
   useEffect(() => {
     traceRef.current?.scrollTo({ top: traceRef.current.scrollHeight, behavior: "smooth" });
@@ -85,7 +87,7 @@ export default function ProfileStage({
           {isDone && (
             <div className="sticky bottom-0 flex justify-end border-t border-white/[0.08] bg-[#14120B] px-10 py-3.5 sm:px-14">
               <button
-                onClick={onAdvance}
+                onClick={() => navigate("/recommendations")}
                 className="inline-flex items-center gap-1.5 rounded-md bg-[#D39237] px-4 py-2 text-[13px] font-semibold text-[#14120B] transition-colors hover:bg-[#D39237]/90"
               >
                 Recommend repo

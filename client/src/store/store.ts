@@ -1,14 +1,16 @@
 import { configureStore } from "@reduxjs/toolkit";
 import authReducer from "./authSlice";
 import devProfileReducer from "./profileSlice";
-import repos from "./reposSlice";
+import repos from "./recommendationsSlice";
+import repoKanbanReducer from "./repoKanbanSlice";
 
 
 export const store = configureStore({
   reducer: {
     auth: authReducer,
     devProfile: devProfileReducer,
-    repos
+    repos,
+    repoKanban: repoKanbanReducer,
   },
 });
 
