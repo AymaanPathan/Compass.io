@@ -5,6 +5,8 @@
 //  - Optional POST body support in consumeAgentStream (the repo recommender
 //    stream takes no body; the issue finder needs to send selectedRepository /
 //    the answer being submitted).
+//  - A distinct "cancelled" outcome for turn_done, instead of folding a
+//    backend-cancelled turn into the success path.
 
 // ---------- Types ----------
 
@@ -106,6 +108,7 @@ export interface StepState {
     | "auth_required"
     | "question_required"
     | "succeeded"
+    | "cancelled"
     | "failed";
   error: string | null;
   authUrls: AuthUrl[];
@@ -224,12 +227,19 @@ export function applyEvent(prev: StepState, e: StepEvent): StepState {
         },
       };
     }
-    case "turn_done":
-      return {
-        ...prev,
-        status: e.status === "error" ? "failed" : "succeeded",
-        pendingQuestion: null,
-      };
+    case "turn_done": {
+      // Three distinct terminal states, not two: a cancelled turn is
+      // neither a success (its output may be partial/incomplete) nor
+      // necessarily an "error" the UI should show as a failure — it's its
+      // own thing, and callers should decide how to present it rather than
+      // having it silently absorbed into "succeeded".
+      let status: StepState["status"];
+      if (e.status === "error") status = "failed";
+      else if (e.status === "cancelled") status = "cancelled";
+      else status = "succeeded";
+
+      return { ...prev, status, pendingQuestion: null };
+    }
     case "error":
       return { ...prev, status: "failed", error: e.message };
     default:
@@ -243,6 +253,7 @@ export type AgentStreamResult<T> =
   | { kind: "done"; data: T; raw: string }
   | { kind: "auth_required"; authUrls: AuthUrl[] }
   | { kind: "question_required"; question: PendingQuestion }
+  | { kind: "cancelled" }
   | { kind: "error"; message: string };
 
 export interface AgentStreamHandlers {
@@ -250,6 +261,7 @@ export interface AgentStreamHandlers {
   onEvent?: (event: StepEvent) => void;
   onAuthRequired?: (authUrls: AuthUrl[]) => void;
   onQuestionRequired?: (question: PendingQuestion) => void;
+  onCancelled?: () => void;
 }
 
 const getToken = () => localStorage.getItem("accessToken");
@@ -324,6 +336,14 @@ export async function consumeAgentStream<T>(
       case "turn_done":
         if (event.status === "error") {
           result = { kind: "error", message: "Agent turn ended in error." };
+        } else if (event.status === "cancelled") {
+          // Don't attempt to parse rawBuffer here — a cancelled turn's
+          // accumulated text is expected to be incomplete, and parsing it
+          // as if it were a finished payload is exactly what produced
+          // either a false "succeeded" or a misleading "malformed output"
+          // error previously.
+          handlers.onCancelled?.();
+          result = { kind: "cancelled" };
         } else if (!result) {
           try {
             const data = JSON.parse(rawBuffer) as T;

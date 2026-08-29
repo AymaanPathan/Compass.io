@@ -1,5 +1,5 @@
 import { Router, Response } from "express";
-import User from "../models/User";
+import User, { AgentRunLockStatus } from "../models/User";
 import { requireAuth, AuthRequest } from "../middleware/auth";
 import {
   REPO_RECOMMENDER_AGENT_NAME,
@@ -98,6 +98,16 @@ async function markRepoRecommendationFailed(userId: string, message: string) {
         repoRecommendationsLastError: message,
       },
     },
+  );
+}
+
+async function releaseLockIfUnchanged(
+  userId: string,
+  statusAtStart: AgentRunLockStatus,
+) {
+  await User.updateOne(
+    { _id: userId, repoRecommendationsStatus: statusAtStart },
+    { $set: { repoRecommendationsStatus: "idle" } },
   );
 }
 
@@ -226,6 +236,13 @@ router.post(
     } finally {
       clearInterval(heartbeat);
       res.end();
+
+      // claimedUser.repoRecommendationsStatus was just set to "running" by
+      // the atomic claim above. If it's still "running" here, neither
+      // onAuthRequired nor the catch block fired — i.e. the turn completed
+      // normally and we're only waiting on the browser's /commit call.
+      // Release the lock so a lost commit can't block future runs.
+      await releaseLockIfUnchanged(claimedUser.id, "running");
     }
   },
 );
@@ -243,6 +260,7 @@ router.post(
         .json({ success: false, error: "No pending GitHub authorization" });
     }
 
+    const statusAtStart = user.repoRecommendationsStatus ?? "auth_required";
     const heartbeat = openSse(res);
 
     try {
@@ -275,6 +293,12 @@ router.post(
     } finally {
       clearInterval(heartbeat);
       res.end();
+
+      // Same safety net: if the resumed turn completed normally (status
+      // never moved away from whatever it was when we started resuming),
+      // release the lock instead of leaving it stuck waiting on a /commit
+      // call that may never come.
+      await releaseLockIfUnchanged(user.id, statusAtStart);
     }
   },
 );

@@ -35,8 +35,16 @@ interface MatchedRepository {
  * Persisted lock state for a streamed agent run. "failed" is set whenever a
  * stream ends in error, so a page refresh mid-run shows the real outcome
  * instead of getting stuck on "running" or silently resetting to "idle".
+ *
+ * Exported so route files (findRepo.ts, github.ts) can type helper
+ * functions against this exact union instead of widening to `string` and
+ * needing an `as any` cast to satisfy Mongoose's typed query filters.
  */
-type AgentRunLockStatus = "idle" | "running" | "auth_required" | "failed";
+export type AgentRunLockStatus =
+  | "idle"
+  | "running"
+  | "auth_required"
+  | "failed";
 
 const AGENT_RUN_STATUSES: AgentRunLockStatus[] = [
   "idle",
@@ -50,7 +58,7 @@ const AGENT_RUN_STATUSES: AgentRunLockStatus[] = [
  * agent pauses mid-run to ask the developer clarifying questions
  * (contribution type, difficulty, time available, goal) before it searches.
  */
-type IssueFinderLockStatus = AgentRunLockStatus | "question_required";
+export type IssueFinderLockStatus = AgentRunLockStatus | "question_required";
 
 const ISSUE_FINDER_STATUSES: IssueFinderLockStatus[] = [
   ...AGENT_RUN_STATUSES,

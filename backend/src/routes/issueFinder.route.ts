@@ -302,6 +302,9 @@ router.post(
     if (!user)
       return res.status(404).json({ success: false, error: "User not found" });
 
+    // Cheap, non-atomic early exit for the common "nothing pending" case —
+    // gives a clean 400 without touching the DB. The real race protection
+    // happens in the findOneAndUpdate below.
     if (
       user.issueFinderStatus !== "question_required" ||
       !user.issueFinderSessionId ||
@@ -324,32 +327,59 @@ router.post(
         .json({ success: false, error: "toolCallId and answer are required" });
     }
 
-    if (toolCallId !== user.issueFinderPendingQuestion.toolCallId) {
-      return res.status(409).json({
-        success: false,
-        error: "This answer doesn't match the currently pending question",
-      });
-    }
-
-    await User.updateOne(
-      { _id: user.id },
+    // Atomically claim this specific pending question: the filter requires
+    // status to still be "question_required" AND the pending question's
+    // toolCallId to still match what the caller is answering. If two
+    // concurrent requests race here, only the first findOneAndUpdate call
+    // actually matches a document — the second gets back null and is
+    // rejected below instead of also launching a duplicate turn.
+    // returnDocument: "before" gives us the pre-update document, which is
+    // where the sessionId and pendingQuestion.threadId we need actually
+    // live (the update itself unsets pendingQuestion).
+    const claimedUser = await User.findOneAndUpdate(
+      {
+        _id: user._id,
+        issueFinderStatus: "question_required",
+        "issueFinderPendingQuestion.toolCallId": toolCallId,
+      } as any,
       {
         $set: { issueFinderStatus: "running" },
         $unset: { issueFinderPendingQuestion: 1 },
       },
+      { returnDocument: "before" },
     );
+
+    if (!claimedUser) {
+      return res.status(409).json({
+        success: false,
+        error:
+          "This answer doesn't match the currently pending question, or it has already been submitted",
+      });
+    }
+
+    const pendingQuestion = claimedUser.issueFinderPendingQuestion;
+    const sessionId = claimedUser.issueFinderSessionId;
+
+    if (!sessionId || !pendingQuestion) {
+      // Shouldn't happen given the filter above, but guard defensively
+      // rather than crash mid-stream.
+      await markIssueFinderFailed(
+        user.id,
+        "Missing session state for pending question",
+      );
+      return res.status(409).json({
+        success: false,
+        error: "Missing session state for pending question",
+      });
+    }
 
     const heartbeat = openSse(res);
 
     try {
       await streamAgentTurn<IssueFinderResult>(
         res,
-        user.issueFinderSessionId,
-        buildAnswerInput(
-          user.issueFinderPendingQuestion.threadId,
-          toolCallId,
-          answer,
-        ),
+        sessionId,
+        buildAnswerInput(pendingQuestion.threadId, toolCallId, answer),
         "issue-finder-answer",
         TOOL_MEANINGS,
         validateIssueFinderResult,

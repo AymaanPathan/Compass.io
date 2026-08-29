@@ -56,7 +56,8 @@ export type IssueFinderRunStatus =
   | "auth_required"
   | "question_required"
   | "succeeded"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 interface QaEntry {
   question: string;
@@ -125,6 +126,8 @@ async function runStream(
   if (result.kind === "error") return { error: result.message };
   if (result.kind === "auth_required") return { authUrls: result.authUrls };
   if (result.kind === "question_required") return { question: result.question };
+  if (result.kind === "cancelled")
+    return { error: "The run was cancelled before it finished." };
   return { payload: result.data, raw: result.raw };
 }
 
