@@ -7,7 +7,6 @@ import { connectDB } from "./config/db";
 import authRoutes from "./routes/auth";
 import githubRoutes from "./routes/github";
 import ossRoutes from "./routes/findRepo";
-import solverRoutes from "./routes/solver";
 import issuesRoutes from "./routes/issues";
 import issueFinderRoutes from "./routes/issueFinder.route"; 
 
@@ -41,9 +40,7 @@ app.use("/api/github", githubRoutes);
 app.use("/api/oss", ossRoutes);
 app.use("/api/kanban", repoKanbanRoutes);
 app.use("/api/issues", issuesRoutes);
-app.use("/api/issue-finder", issueFinderRoutes); // NEW — kept separate from
-// /api/issues since that path is already used by routes/issues.ts
-app.use("/api/solver", solverRoutes);
+app.use("/api/issue-finder", issueFinderRoutes); 
 
 app.get("/", (_req: Request, res: Response) => {
   res.json({

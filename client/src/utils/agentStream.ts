@@ -42,6 +42,7 @@ export type StepEvent =
   | {
       type: "question_required";
       toolCallId: string;
+      threadId: string;
       question: string;
       options: string[];
     }
@@ -60,6 +61,7 @@ export interface AuthUrl {
 
 export interface PendingQuestion {
   toolCallId: string;
+  threadId: string;
   question: string;
   options: string[];
 }
@@ -206,6 +208,7 @@ export function applyEvent(prev: StepState, e: StepEvent): StepState {
         (s): s is Extract<StepNode, { kind: "tool_call" }> =>
           s.kind === "tool_call" &&
           s.name === "ask_user_question" &&
+          s.id === e.toolCallId &&
           s.status === "running",
       );
       if (node) node.status = "done";
@@ -215,6 +218,7 @@ export function applyEvent(prev: StepState, e: StepEvent): StepState {
         status: "question_required",
         pendingQuestion: {
           toolCallId: e.toolCallId,
+          threadId: e.threadId,
           question: e.question,
           options: e.options,
         },
@@ -310,6 +314,7 @@ export async function consumeAgentStream<T>(
           toolCallId: event.toolCallId,
           question: event.question,
           options: event.options,
+          threadId: event.threadId,
         };
         handlers.onQuestionRequired?.(question);
         result = { kind: "question_required", question };

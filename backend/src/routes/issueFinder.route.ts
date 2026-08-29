@@ -345,7 +345,11 @@ router.post(
       await streamAgentTurn<IssueFinderResult>(
         res,
         user.issueFinderSessionId,
-        buildAnswerInput(toolCallId, answer),
+        buildAnswerInput(
+          user.issueFinderPendingQuestion.threadId,
+          toolCallId,
+          answer,
+        ),
         "issue-finder-answer",
         TOOL_MEANINGS,
         validateIssueFinderResult,

@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import { requireAuth } from "../middleware/auth";
 import {
-  agentClient,
+  trueforge,
   OSS_ISSUES_AGENT_NAME,
   OSS_ISSUE_DEEP_DIVE_AGENT_NAME,
   OSS_CODE_EXPLORER_AGENT_NAME,
@@ -575,13 +575,13 @@ async function runAgent(
 ): Promise<string> {
   return withAgentRetry(
     async () => {
-      const { data: session } = await agentClient.sessions.create({
+      const { data: session } = await trueforge.sessions.create({
         agent: {
           name: agentName,
         },
       });
 
-      const stream = await agentClient.sessions.createTurnStream(session.id, {
+      const stream = await trueforge.sessions.createTurnStream(session.id, {
         input: [
           {
             type: "user.message",

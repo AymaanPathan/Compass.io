@@ -67,6 +67,7 @@ interface PendingQuestion {
   toolCallId: string;
   question: string;
   options: string[];
+  threadId: string;
 }
 
 interface ContributionIntent {
@@ -171,6 +172,7 @@ const PendingQuestionSchema = new Schema(
     toolCallId: String,
     question: String,
     options: [String],
+    threadId: String,
   },
   { _id: false },
 );
