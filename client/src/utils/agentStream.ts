@@ -1,14 +1,4 @@
 // client/src/lib/agentStream.ts
-// Shared by recommendationsSlice AND issueFinderSlice. Extended with:
-//  - `question_required` event/state, mirroring how `auth_required` already
-//    pauses the stream.
-//  - Optional POST body support in consumeAgentStream (the repo recommender
-//    stream takes no body; the issue finder needs to send selectedRepository /
-//    the answer being submitted).
-//  - A distinct "cancelled" outcome for turn_done, instead of folding a
-//    backend-cancelled turn into the success path.
-
-// ---------- Types ----------
 
 export type StepEvent =
   | { type: "turn_start"; turnId: string }
@@ -264,21 +254,39 @@ export interface AgentStreamHandlers {
   onCancelled?: () => void;
 }
 
+export interface AgentStreamOptions {
+  /**
+   * How to interpret the accumulated text_delta content once turn_done
+   * arrives.
+   *  - "json" (default): the agent's final output is a JSON payload —
+   *    JSON.parse it and surface `data: T`. This is what
+   *    recommendationsSlice and issueFinderSlice expect.
+   *  - "text": the agent's final output is plain text/markdown (e.g. the
+   *    issue-resolution agent's Deep Dive / Solver reports). No parsing is
+   *    attempted; `data` is the raw string, cast to T by the caller.
+   */
+  parseAs?: "json" | "text";
+}
+
 const getToken = () => localStorage.getItem("accessToken");
 
 /**
  * Opens a POST'd SSE stream at `url` and dispatches parsed StepEvents to
  * `handlers.onEvent` live. Separately accumulates text_delta chunks so the
- * caller gets the final parsed JSON payload once turn_done arrives.
+ * caller gets the final output once turn_done arrives — either JSON-parsed
+ * or as raw text, depending on `options.parseAs`.
  *
  * `body`, when provided, is JSON-stringified and sent as the POST body
- * (used to pass selectedRepository / question answers).
+ * (used to pass selectedRepository / question answers / issue URLs).
  */
 export async function consumeAgentStream<T>(
   url: string,
   handlers: AgentStreamHandlers = {},
   body?: unknown,
+  options: AgentStreamOptions = {},
 ): Promise<AgentStreamResult<T>> {
+  const parseAs = options.parseAs ?? "json";
+
   const res = await fetch(url, {
     method: "POST",
     credentials: "include",
@@ -345,14 +353,24 @@ export async function consumeAgentStream<T>(
           handlers.onCancelled?.();
           result = { kind: "cancelled" };
         } else if (!result) {
-          try {
-            const data = JSON.parse(rawBuffer) as T;
-            result = { kind: "done", data, raw: rawBuffer };
-          } catch {
+          if (parseAs === "text") {
+            // Plain text/markdown output (e.g. Deep Dive / Solver reports)
+            // — no parsing, just hand back what streamed in.
             result = {
-              kind: "error",
-              message: "Agent finished but returned malformed output.",
+              kind: "done",
+              data: rawBuffer as unknown as T,
+              raw: rawBuffer,
             };
+          } else {
+            try {
+              const data = JSON.parse(rawBuffer) as T;
+              result = { kind: "done", data, raw: rawBuffer };
+            } catch {
+              result = {
+                kind: "error",
+                message: "Agent finished but returned malformed output.",
+              };
+            }
           }
         }
         break;

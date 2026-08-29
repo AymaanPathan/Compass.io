@@ -136,6 +136,51 @@ export function openSse(res: Response) {
 }
 
 /**
+ * Builds the `input` array to resume a paused turn after the user answered
+ * a question, per the documented `user.tool_response` input item:
+ *   { type: "user.tool_response", threadId, toolCallId, content }
+ * `content` is the free-form answer text, NOT JSON-wrapped.
+ */
+export function buildAnswerInput(
+  threadId: string,
+  toolCallId: string,
+  answer: string,
+) {
+  return [
+    {
+      type: "user.tool_response",
+      threadId,
+      toolCallId,
+      content: answer,
+    },
+  ];
+}
+
+/**
+ * Builds the `input` array for a brand-new, plain-text user turn on an
+ * existing session — used to kick off a fresh turn (e.g. handing the issue
+ * URL to the issue-resolution agent) as well as to send the human approval
+ * gate's message ("Implement the fix") that starts that agent's Phase B.
+ *
+ * Unlike buildAnswerInput, this isn't resuming a paused tool call — it's a
+ * normal new message on the thread, so no toolCallId/threadId pairing is
+ * required.
+ *
+ * ASSUMPTION: mirrors the shape of the documented `user.tool_response` item
+ * above. If your SDK/gateway names a plain user message differently (e.g.
+ * "user.message" isn't the literal type string it expects), this is the
+ * only place that needs to change.
+ */
+export function buildUserMessageInput(content: string) {
+  return [
+    {
+      type: "user.message",
+      content,
+    },
+  ];
+}
+
+/**
  * Direct index of every tool call seen on this stream, keyed by the tool
  * call's OWN id (e.g. "chatcmpl-tool-...").
  *
@@ -325,27 +370,6 @@ function extractPendingQuestion(
 
   warn(label, "extractPendingQuestion: exhausted all groups, resolved nothing");
   return null;
-}
-
-/**
- * Builds the `input` array to resume a paused turn after the user answered
- * a question, per the documented `user.tool_response` input item:
- *   { type: "user.tool_response", threadId, toolCallId, content }
- * `content` is the free-form answer text, NOT JSON-wrapped.
- */
-export function buildAnswerInput(
-  threadId: string,
-  toolCallId: string,
-  answer: string,
-) {
-  return [
-    {
-      type: "user.tool_response",
-      threadId,
-      toolCallId,
-      content: answer,
-    },
-  ];
 }
 
 export async function streamAgentTurn<T = unknown>(

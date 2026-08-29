@@ -7,6 +7,9 @@ export const trueforge = new TrueForge({
 
 export const DEV_PROFILE_AGENT_NAME = "developer-profile-agent";
 export const REPO_RECOMMENDER_AGENT_NAME = "repo-recommender-agent";
+
+export const ISSUE_RESOLUTION_AGENT_NAME = "issue-resolution-agent";
+
 export const ISSUE_EXPLAINER_AGENT_NAME = "issue-explainer-agent";
 export const SOLVE_APPROACH_AGENT_NAME = "solve-approach-agent";
 export const BOUNDED_SOLVER_AGENT_NAME = "bounded-solver";

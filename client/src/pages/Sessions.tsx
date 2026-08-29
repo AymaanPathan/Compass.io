@@ -3,6 +3,7 @@ import AppLayout from "../components/AppLayout";
 import ProfileStage from "../components/ProfileStage";
 import RecommendationsStage from "../components/RecommendationsStage";
 import IssueFinderStage from "../components/issueFinderStage";
+import IssueResolutionStage from "../components/IssueResolutionStage";
 import { useAppDispatch, useAppSelector } from "../store/storeHook";
 import { runProfileStream, resumeProfileStream } from "../store/profileSlice";
 import {
@@ -17,14 +18,25 @@ import {
   resumeIssueFinderStream,
   selectRepositoryForIssues,
   selectIssueFinder,
+  type MatchedIssue,
 } from "../store/issueFinderSlice";
+import {
+  startIssueResolution,
+  approveIssueResolution,
+  declineImplementation,
+  answerIssueResolutionQuestion,
+  resumeIssueResolutionStream,
+  selectIssueForResolution,
+  selectIssueResolution,
+} from "../store/issueResolutionSlice";
 
-type Step = "profile" | "recommendations" | "issues";
+type Step = "profile" | "recommendations" | "issues" | "resolve";
 
 const STEPS: { key: Step; label: string }[] = [
   { key: "profile", label: "1 · Profile" },
   { key: "recommendations", label: "2 · Recommend repos" },
   { key: "issues", label: "3 · Find issues" },
+  { key: "resolve", label: "4 · Resolve" },
 ];
 
 function SessionContent() {
@@ -32,6 +44,7 @@ function SessionContent() {
   const profile = useAppSelector((s) => s.devProfile);
   const recommendations = useAppSelector(selectRecommendations);
   const issueFinder = useAppSelector(selectIssueFinder);
+  const issueResolution = useAppSelector(selectIssueResolution);
 
   const [step, setStep] = useState<Step>("profile");
 
@@ -44,6 +57,7 @@ function SessionContent() {
       return profile.status === "succeeded" || !!profile.data;
     if (key === "issues")
       return !!issueFinder.selectedRepository || !!issueFinder.data;
+    if (key === "resolve") return !!issueResolution.issueUrl;
     return false;
   };
 
@@ -58,6 +72,13 @@ function SessionContent() {
       }),
     );
     setStep("issues");
+  };
+
+  const handleResolveIssue = (issue: MatchedIssue) => {
+    // Same pattern as handleFindIssues: pre-load the picked issue into
+    // issueResolutionSlice and navigate to the resolve step locally.
+    dispatch(selectIssueForResolution(issue.url));
+    setStep("resolve");
   };
 
   return (
@@ -111,6 +132,39 @@ function SessionContent() {
             }
             onAnswer={(answer) => dispatch(answerIssueFinderQuestion(answer))}
             onResume={() => dispatch(resumeIssueFinderStream())}
+            onResolve={handleResolveIssue}
+          />
+        )}
+
+        {step === "resolve" && (
+          <IssueResolutionStage
+            issueUrl={issueResolution.issueUrl}
+            phase={issueResolution.phase}
+            status={issueResolution.status}
+            steps={issueResolution.steps}
+            streamingText={issueResolution.streamingText}
+            deepDiveReport={issueResolution.deepDiveReport}
+            solverReport={issueResolution.solverReport}
+            solverStatus={issueResolution.solverStatus}
+            authUrls={issueResolution.authUrls}
+            pendingQuestion={issueResolution.pendingQuestion}
+            error={issueResolution.error}
+            declined={issueResolution.declined}
+            cached={issueResolution.cached}
+            onStart={() =>
+              issueResolution.issueUrl &&
+              dispatch(startIssueResolution(issueResolution.issueUrl))
+            }
+            onApprove={() => dispatch(approveIssueResolution())}
+            onDecline={() => dispatch(declineImplementation())}
+            onAnswer={(answer) =>
+              dispatch(answerIssueResolutionQuestion(answer))
+            }
+            onResume={() => dispatch(resumeIssueResolutionStream())}
+            onStartOver={() =>
+              issueResolution.issueUrl &&
+              dispatch(startIssueResolution(issueResolution.issueUrl))
+            }
           />
         )}
       </div>

@@ -22,6 +22,7 @@ interface IssueFinderStageProps {
   onStart: () => void;
   onAnswer: (answer: string) => void;
   onResume: () => void;
+  onResolve: (issue: MatchedIssue) => void;
 }
 
 export default function IssueFinderStage({
@@ -37,6 +38,7 @@ export default function IssueFinderStage({
   onStart,
   onAnswer,
   onResume,
+  onResolve,
 }: IssueFinderStageProps) {
   const traceRef = useRef<HTMLDivElement>(null);
 
@@ -117,7 +119,11 @@ export default function IssueFinderStage({
             )}
             {isBusy && <SearchingState status={status} />}
             {isDone && issues && (
-              <IssueResults issues={issues} onRegenerate={onStart} />
+              <IssueResults
+                issues={issues}
+                onRegenerate={onStart}
+                onResolve={onResolve}
+              />
             )}
           </div>
         </section>
@@ -145,6 +151,10 @@ function StatusBar({
     question_required: { label: "Waiting for your answer", live: true },
     failed: { label: "Failed", live: false },
     succeeded: { label: "Complete", live: false },
+    cancelled: {
+      label: "",
+      live: false
+    }
   };
   const s = map[status];
 
@@ -530,9 +540,11 @@ function safeStringify(value: unknown) {
 function IssueResults({
   issues,
   onRegenerate,
+  onResolve,
 }: {
   issues: MatchedIssue[];
   onRegenerate: () => void;
+  onResolve: (issue: MatchedIssue) => void;
 }) {
   return (
     <div className="space-y-5">
@@ -553,14 +565,27 @@ function IssueResults({
 
       <div className="grid gap-4 lg:grid-cols-2">
         {issues.map((issue, i) => (
-          <IssueCard key={issue.url} issue={issue} rank={i + 1} />
+          <IssueCard
+            key={issue.url}
+            issue={issue}
+            rank={i + 1}
+            onResolve={onResolve}
+          />
         ))}
       </div>
     </div>
   );
 }
 
-function IssueCard({ issue, rank }: { issue: MatchedIssue; rank: number }) {
+function IssueCard({
+  issue,
+  rank,
+  onResolve,
+}: {
+  issue: MatchedIssue;
+  rank: number;
+  onResolve: (issue: MatchedIssue) => void;
+}) {
   return (
     <div className="group relative flex flex-col rounded-md border border-white/[0.08] p-6 transition-colors hover:border-white/[0.18]">
       <div className="flex items-start justify-between gap-3">
@@ -602,6 +627,22 @@ function IssueCard({ issue, rank }: { issue: MatchedIssue; rank: number }) {
       <p className="mt-4 border-t border-white/[0.06] pt-3 text-[12px] leading-relaxed text-[#EDECEC]/60">
         {issue.whyItMatches}
       </p>
+
+      <button
+        onClick={() => onResolve(issue)}
+        className="mt-4 inline-flex w-fit items-center gap-1.5 rounded-md border border-[#D39237]/40 px-3 py-1.5 text-[12px] font-medium text-[#D39237] transition-colors hover:bg-[#D39237]/10"
+      >
+        Resolve with agent
+        <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+          <path
+            d="M2 6h8M6.5 2.5 10 6l-3.5 3.5"
+            stroke="#D39237"
+            strokeWidth="1.3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
     </div>
   );
 }
