@@ -3,7 +3,7 @@ import { useSelector } from "react-redux";
 import type { RootState } from "../store/store";
 
 const NAV_ITEMS = [
-  { to: "/issues-board", label: "Issues" },
+  { to: "/issues", label: "Issues" },
   { to: "/repositories", label: "Repositories" },
   { to: "/sessions", label: "Sessions" },
 ];

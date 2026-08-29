@@ -28,6 +28,50 @@ export interface DeveloperProfile {
   funInsights: string[];
 }
 
+const EXPERIENCE_LEVELS = [
+  "Beginner",
+  "Early Intermediate",
+  "Intermediate",
+  "Advanced",
+] as const;
+
+/**
+ * Runtime shape guard for browser-supplied profile JSON before it's ever
+ * assigned to the user document. Deliberately conservative: checks presence
+ * and top-level types, not deep validation of every array element, since the
+ * goal is to reject malformed/garbage payloads, not fully re-derive a schema.
+ */
+function isValidDeveloperProfile(value: unknown): value is DeveloperProfile {
+  if (!value || typeof value !== "object") return false;
+  const p = value as Record<string, unknown>;
+
+  const isStringArray = (v: unknown): v is string[] =>
+    Array.isArray(v) && v.every((item) => typeof item === "string");
+
+  const isTechConfidenceArray = (v: unknown): v is TechConfidence[] =>
+    Array.isArray(v) &&
+    v.every(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        typeof (item as Record<string, unknown>).name === "string" &&
+        typeof (item as Record<string, unknown>).confidence === "number",
+    );
+
+  return (
+    typeof p.builderArchetype === "string" &&
+    typeof p.developerType === "string" &&
+    typeof p.summary === "string" &&
+    typeof p.githubVibe === "string" &&
+    EXPERIENCE_LEVELS.includes(p.experienceLevel as any) &&
+    isTechConfidenceArray(p.strongestTechnologies) &&
+    isStringArray(p.strengths) &&
+    isStringArray(p.engineeringPatterns) &&
+    isStringArray(p.contributionAreas) &&
+    isStringArray(p.funInsights)
+  );
+}
+
 /**
  * Human-facing meaning for each MCP tool the developer-profile-agent is
  * allowed to call. Keep in sync with its `enableTools` list.
@@ -153,22 +197,43 @@ router.post(
   "/profile/stream/resume",
   requireAuth,
   async (req: AuthRequest, res: Response) => {
-    const user = await User.findById(req.userId);
-    if (!user)
-      return res.status(404).json({ success: false, error: "User not found" });
-    if (!user.developerProfileSessionId) {
-      return res
-        .status(400)
-        .json({ success: false, error: "No pending GitHub authorization" });
+    // Atomically claim the resume: only one concurrent request can move a
+    // session out of "auth_required" into "running". Without this, two
+    // requests can both read a truthy developerProfileSessionId and both
+    // start a turn on the same session.
+    const claimed = await User.findOneAndUpdate(
+      {
+        _id: req.userId,
+        developerProfileSessionId: { $exists: true, $ne: null },
+        developerProfileStatus: "auth_required",
+      },
+      { $set: { developerProfileStatus: "running" } },
+      { new: true },
+    );
+
+    if (!claimed) {
+      // Distinguish "user doesn't exist" from "nothing pending to resume"
+      // so the client gets an accurate error either way.
+      const exists = await User.exists({ _id: req.userId });
+      if (!exists) {
+        return res
+          .status(404)
+          .json({ success: false, error: "User not found" });
+      }
+      return res.status(400).json({
+        success: false,
+        error: "No pending GitHub authorization",
+      });
     }
 
+    const user = claimed;
     const heartbeat = openSse(res);
 
     try {
       // Per TrueForge docs: after mcp.auth_required, resume with empty input.
       await streamAgentTurn<DeveloperProfile>(
         res,
-        user.developerProfileSessionId,
+        user.developerProfileSessionId!,
         [],
         "profile-resume",
         TOOL_MEANINGS,
@@ -210,11 +275,18 @@ router.post(
       return res.status(404).json({ success: false, error: "User not found" });
 
     const { profile, raw } = req.body as {
-      profile: DeveloperProfile;
+      profile: unknown;
       raw: string;
     };
 
-    user.developerProfile = profile as any;
+    if (!isValidDeveloperProfile(profile)) {
+      return res.status(400).json({
+        success: false,
+        error: "Malformed developer profile payload",
+      });
+    }
+
+    user.developerProfile = profile;
     user.developerProfileRaw = raw;
     user.developerProfileParseFailed = false;
     user.developerProfileGeneratedAt = new Date();

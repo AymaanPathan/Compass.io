@@ -22,7 +22,7 @@ function MarkGlyph() {
 const NAV_LINKS = [
   { to: "/sessions", label: "Profile" },
   { to: "/repositories", label: "Repositories" },
-  { to: "/issues-board", label: "Issues" },
+  { to: "/issues-board"q, label: "Issues" },
 ];
 
 export default function Nav() {

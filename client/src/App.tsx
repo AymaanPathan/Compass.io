@@ -5,6 +5,7 @@ import { loadCurrentUser } from "./store/authSlice";
 import Landing from "./pages/Landing";
 import Sessions from "./pages/Sessions";
 import Repositories from "./pages/RepositoriesKanban";
+import Issues from "./pages/Issues";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { status } = useAppSelector((s) => s.auth);
@@ -53,6 +54,14 @@ export default function App() {
         />
 
         <Route path="*" element={<Navigate to="/" replace />} />
+        <Route
+          path="/issues"
+          element={
+            <RequireAuth>
+              <Issues />
+            </RequireAuth>
+          }
+        />
       </Routes>
     </BrowserRouter>
   );

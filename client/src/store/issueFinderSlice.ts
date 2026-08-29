@@ -132,7 +132,7 @@ async function commitIssueFinderResult(payload: {
   payload: IssueFinderPayload;
   raw: string;
 }) {
-  await fetch(`${API_BASE}/commit`, {
+  const res = await fetch(`${API_BASE}/commit`, {
     method: "POST",
     credentials: "include",
     headers: {
@@ -141,6 +141,36 @@ async function commitIssueFinderResult(payload: {
     },
     body: JSON.stringify({ data: payload.payload, raw: payload.raw }),
   });
+
+  if (!res.ok) {
+    let message = `Commit failed (${res.status})`;
+    try {
+      const body = await res.json();
+      if (body?.error) message = body.error;
+    } catch {
+      // response body wasn't JSON — fall back to the status message above
+    }
+    throw new Error(message);
+  }
+}
+
+/**
+ * Wraps commitIssueFinderResult so every call site turns a thrown commit
+ * failure into a plain { error } shape instead of letting it reject the
+ * thunk with an unhandled exception. Keeps the three thunks below symmetric.
+ */
+async function commitOrError(result: {
+  payload: IssueFinderPayload;
+  raw: string;
+}): Promise<{ error: string } | null> {
+  try {
+    await commitIssueFinderResult(result);
+    return null;
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : "Failed to save results",
+    };
+  }
 }
 
 /**
@@ -166,7 +196,9 @@ export const startIssueFinder = createAsyncThunk<
     if ("error" in result) return rejectWithValue(result.error);
     if ("authUrls" in result || "question" in result) return result;
 
-    await commitIssueFinderResult(result);
+    const commitError = await commitOrError(result);
+    if (commitError) return rejectWithValue(commitError.error);
+
     return { ...result, generatedAt: new Date().toISOString() };
   },
 );
@@ -197,7 +229,9 @@ export const answerIssueFinderQuestion = createAsyncThunk<
     if ("error" in result) return rejectWithValue(result.error);
     if ("authUrls" in result || "question" in result) return result;
 
-    await commitIssueFinderResult(result);
+    const commitError = await commitOrError(result);
+    if (commitError) return rejectWithValue(commitError.error);
+
     return { ...result, generatedAt: new Date().toISOString() };
   },
 );
@@ -212,7 +246,9 @@ export const resumeIssueFinderStream = createAsyncThunk<
   if ("authUrls" in result || "question" in result)
     return rejectWithValue("Still waiting on GitHub authorization");
 
-  await commitIssueFinderResult(result);
+  const commitError = await commitOrError(result);
+  if (commitError) return rejectWithValue(commitError.error);
+
   return { ...result, generatedAt: new Date().toISOString() };
 });
 
