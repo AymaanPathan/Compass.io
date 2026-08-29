@@ -11,6 +11,7 @@ import {
   resumeRecommendationsStream,
   selectRecommendations,
   type MatchedRepository,
+  answerRecommendationsQuestion,
 } from "../store/recommendationsSlice";
 import {
   startIssueFinder,
@@ -107,9 +108,14 @@ function SessionContent() {
             repos={recommendations.data}
             steps={recommendations.steps}
             authUrls={recommendations.authUrls}
+            pendingQuestion={recommendations.pendingQuestion}
+            qaHistory={recommendations.qaHistory}
             error={recommendations.error}
             cached={recommendations.cached}
             onStart={() => dispatch(runRecommendationsStream())}
+            onAnswer={(answer) =>
+              dispatch(answerRecommendationsQuestion(answer))
+            }
             onResume={() => dispatch(resumeRecommendationsStream())}
             onFindIssues={handleFindIssues}
           />

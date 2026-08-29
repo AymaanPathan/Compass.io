@@ -5,7 +5,7 @@ import {
   REPO_RECOMMENDER_AGENT_NAME,
   trueforge,
 } from "../services/agentClient";
-import { openSse, streamAgentTurn, ToolMeaning } from "../services/agentStream";
+import { buildAnswerInput, openSse, streamAgentTurn, ToolMeaning } from "../services/agentStream";
 
 const router = Router();
 
@@ -243,6 +243,72 @@ router.post(
       // normally and we're only waiting on the browser's /commit call.
       // Release the lock so a lost commit can't block future runs.
       await releaseLockIfUnchanged(claimedUser.id, "running");
+    }
+  },
+);
+
+
+router.post(
+  "/recommendations/stream/answer",
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    const { toolCallId, threadId, answer } = req.body as {
+      toolCallId?: string;
+      threadId?: string;
+      answer?: string;
+    };
+    if (!toolCallId || !answer) {
+      return void res
+        .status(400)
+        .json({ error: "toolCallId and answer are required" });
+    }
+
+    const user = await User.findById(req.userId);
+    if (!user)
+      return void res
+        .status(404)
+        .json({ success: false, error: "User not found" });
+
+    if (!user.repoRecommendationsSessionId) {
+      return void res.status(400).json({
+        success: false,
+        error: "No pending recommendation run to answer",
+      });
+    }
+
+    const heartbeat = openSse(res);
+
+    try {
+      await streamAgentTurn<RepoRecommendations>(
+        res,
+        user.repoRecommendationsSessionId,
+        buildAnswerInput(threadId ?? "main", toolCallId, answer),
+        "oss-answer",
+        TOOL_MEANINGS,
+        validateRecommendations,
+        {
+          onAuthRequired: async () => {
+            await User.updateOne(
+              { _id: user.id },
+              { $set: { repoRecommendationsStatus: "auth_required" } },
+            );
+          },
+          onError: (message) => markRepoRecommendationFailed(user.id, message),
+        },
+      );
+    } catch (error: any) {
+      logErrorChain("answer", error);
+      res.write(
+        `data: ${JSON.stringify({ type: "error", message: "Failed to submit your answer" })}\n\n`,
+      );
+      await markRepoRecommendationFailed(
+        user.id,
+        "Failed to submit your answer",
+      );
+    } finally {
+      clearInterval(heartbeat);
+      res.end();
+      await releaseLockIfUnchanged(user.id, "running");
     }
   },
 );
