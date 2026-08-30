@@ -12,7 +12,7 @@ async function createAgent() {
 
       manifest: {
         model: {
-          name: "nemotron/nvidia-nemotron-3-super-120b-a-12b",
+          name: "nvidia-model/openai-gpt-oss-120b",
         },
 
         instructions: `
@@ -1142,11 +1142,14 @@ CHANGED FILES ARTIFACT
 
 This section is REQUIRED.
 
-The Solver runs inside the same repository the Reviewer will inspect
-directly via \`git diff\`. There is no need to reproduce full file
-contents in this response — that becomes unwieldy on large files and
-duplicates what git already shows. Report only the path and
-operation for every actual changed file:
+This changes the RESPONSE SCHEMA only — it does not change how you
+solve the issue. You already ran \`git diff\` in STAGE 4; this section
+just requires you to carry that real output into the final artifact
+instead of summarizing it in prose.
+
+For EVERY actual changed file, report its real code diff — the
+Reviewer needs to see the exact lines that changed, not a
+paraphrase like "fixed regex".
 
 <CHANGED_FILES>
 
@@ -1154,14 +1157,45 @@ operation for every actual changed file:
   "files": [
     {
       "path": "src/example.ts",
-      "operation": "MODIFIED"
+      "operation": "MODIFIED",
+      "symbol": "functionOrConstantName",
+      "before": "the exact pre-change snippet for the changed region",
+      "after": "the exact post-change snippet for the changed region",
+      "diff": "@@ -7,7 +7,7 @@\\n unchanged context line\\n-removed line\\n+added line\\n unchanged context line"
     }
   ]
 }
 
 </CHANGED_FILES>
 
-RULES:
+FIELD RULES:
+
+- \`path\`: repo-relative path (no \`/workspace/repo\` prefix).
+- \`operation\`: MODIFIED, ADDED, or DELETED — derived directly from
+  \`git status\` / \`git diff\`, never from memory or the Deep Dive.
+- \`symbol\`: the function, constant, class, or block the change is
+  inside (e.g. \`dataUriPattern\`, \`truncateBase64Content\`). If a
+  file's changes span multiple unrelated symbols, include one entry
+  per symbol rather than merging them.
+- \`before\` / \`after\`: the exact snippet immediately surrounding the
+  change — enough lines to show the change in context (typically the
+  full statement or function, not the full file). Copy these
+  verbatim from the actual pre-edit and post-edit file content you
+  already read in STAGE 2 / STAGE 4 — never reconstruct or
+  paraphrase them.
+- \`diff\`: the actual unified-diff hunk for this change, taken
+  directly from \`git diff\` output for that file (the \`@@ ... @@\`
+  hunk header plus its \` \`/\`-\`/\`+\` lines). If a file's real diff
+  contains multiple hunks for the same symbol, include the full set
+  of hunks for that symbol in this one string.
+- For ADDED files: \`operation\` is ADDED, \`before\` is \`null\`, and
+  \`after\` is the new file's relevant content (or the full file if
+  short). \`diff\` is the real \`git diff\` output for the new file.
+- For DELETED files: \`operation\` is DELETED, \`after\` is \`null\`,
+  and \`before\` is the file's content prior to deletion. \`diff\` is
+  the real \`git diff\` output for the deletion.
+
+HARD RULES:
 
 - Include EVERY actual changed file that is an intentional part of
   the fix (per STAGE 4).
@@ -1169,9 +1203,18 @@ RULES:
   lockfile you restored with \`git checkout --\`).
 - Do NOT include scratch/validator files — they must not exist in
   the repository by this point.
-- Do NOT include file contents. Operation is one of MODIFIED, ADDED,
-  DELETED, derived directly from \`git status\` / \`git diff\` — never
-  from memory or from the Deep Dive.
+- The \`diff\` field MUST be the real repository diff, produced by
+  actually running \`git diff\` (or \`git diff --no-index\` for an
+  added/deleted file) after implementation — never fabricated,
+  summarized, or reconstructed from memory of the edit.
+- Do NOT describe a change only in prose in place of \`diff\` — prose
+  goes in the "Changes Made" section above; this artifact carries the
+  literal diff.
+- If a file's diff is very large (e.g. a big generated or vendored
+  file changed unexpectedly), that is itself a signal something went
+  wrong — see STAGE 4 — do not truncate it silently here; either it
+  belongs in the fix and gets its full real diff, or it doesn't
+  belong and should have been reverted before this stage.
 
 
 ==================================================
@@ -1350,8 +1393,16 @@ coverage exists, not whether a test file was touched
 
 NEVER:
 
-reproduce full file contents in the changed-files artifact — path
-and operation only; the Reviewer inspects the repository directly
+fabricate, paraphrase, or reconstruct the \`diff\`/\`before\`/\`after\`
+fields in the changed-files artifact — they must be the real content
+and real \`git diff\` output captured after implementation, not a
+summary of what you intended to change
+
+NEVER:
+
+dump an entire large file into \`before\`/\`after\` when only a small
+region changed — scope them to the changed symbol's region, and let
+\`diff\` carry the precise hunk
 
 NEVER:
 
@@ -1416,8 +1467,9 @@ instead of working around them.
 REVIEW restores the repository to contain only the intentional diff.
 
 REPORT tells the truth about what ran, what passed, what didn't, and
-hands the Reviewer a lightweight file list — not a duplicate copy of
-the repository.
+hands the Reviewer the real diff for every changed file — path,
+operation, symbol, before/after, and the actual \`git diff\` hunk —
+not a prose paraphrase and not a full file dump.
 
 Never edit before approval.
 

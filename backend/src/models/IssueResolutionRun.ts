@@ -1,3 +1,5 @@
+// server/models/IssueResolutionRun.ts
+
 import { Schema, model, Types } from "mongoose";
 
 export type IssueResolutionPhase =
@@ -29,11 +31,32 @@ const schema = new Schema<IssueResolutionRunDoc>(
       required: true,
       index: true,
     },
-    issueUrl: { type: String, required: true },
-    owner: { type: String, required: true },
-    repo: { type: String, required: true },
-    issueNumber: { type: Number, required: true },
-    sessionId: { type: String, required: true },
+
+    issueUrl: {
+      type: String,
+      required: true,
+    },
+
+    owner: {
+      type: String,
+      required: true,
+    },
+
+    repo: {
+      type: String,
+      required: true,
+    },
+
+    issueNumber: {
+      type: Number,
+      required: true,
+    },
+
+    sessionId: {
+      type: String,
+      required: true,
+    },
+
     phase: {
       type: String,
       enum: [
@@ -45,10 +68,26 @@ const schema = new Schema<IssueResolutionRunDoc>(
       ],
       default: "investigating",
     },
-    deepDiveReport: { type: String, default: null },
-    solverReport: { type: String, default: null },
-    solverStatus: { type: String, default: null },
-    generatedAt: { type: Date, default: Date.now },
+
+    deepDiveReport: {
+      type: String,
+      default: null,
+    },
+
+    solverReport: {
+      type: String,
+      default: null,
+    },
+
+    solverStatus: {
+      type: String,
+      default: null,
+    },
+
+    generatedAt: {
+      type: Date,
+      default: Date.now,
+    },
   },
   { timestamps: true },
 );

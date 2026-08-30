@@ -1,5 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { StepTrace } from "./AgentStepTrace";
+import MarkdownReport from "./MarkdownReport";
+import SolverTabs from "./SolverTabs";
+import { parseSolverReport } from "../utils/parseSolverReport";
 import type {
   IssueResolutionPhase,
   IssueResolutionRunStatus,
@@ -18,6 +21,7 @@ interface Props {
   deepDiveReport: string | null;
   solverReport: string | null;
   solverStatus: SolverStatus;
+  solverDiff: string | null;
   authUrls: AuthUrl[];
   pendingQuestion: PendingQuestion | null;
   error: string | null;
@@ -28,11 +32,6 @@ interface Props {
   onDecline: () => void;
   onAnswer: (answer: string) => void;
   onResume: () => void;
-  /**
-   * Resets the whole resolution run back to idle (dispatches
-   * resetIssueResolution) so the user can pick a fresh issue and go again.
-   * Only meaningful once there's something to reset — i.e. phase !== "idle".
-   */
   onStartOver: () => void;
 }
 
@@ -45,6 +44,7 @@ export default function IssueResolutionStage({
   deepDiveReport,
   solverReport,
   solverStatus,
+  solverDiff,
   authUrls,
   pendingQuestion,
   error,
@@ -59,20 +59,11 @@ export default function IssueResolutionStage({
 }: Props) {
   const traceRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    traceRef.current?.scrollTo({
-      top: traceRef.current.scrollHeight,
-      behavior: "smooth",
-    });
+    traceRef.current?.scrollTo({ top: traceRef.current.scrollHeight, behavior: "smooth" });
   }, [steps, pendingQuestion]);
 
   const isIdle = phase === "idle";
   const isBusy = status === "connecting" || status === "running";
-  const report =
-    phase === "done"
-      ? solverReport
-      : phase === "awaiting_approval"
-        ? deepDiveReport
-        : null;
 
   return (
     <div className="flex h-[calc(100vh-48px)] w-full flex-col bg-[#14120B] text-[#EDECEC]">
@@ -130,34 +121,81 @@ export default function IssueResolutionStage({
         <section className="relative flex min-w-0 flex-1 flex-col overflow-y-auto">
           <div className="w-full flex-1 px-10 py-8 sm:px-14">
             {isIdle && <IdleHero issueUrl={issueUrl} onStart={onStart} />}
-            {isBusy && !report && (
+
+            {isBusy && phase !== "implementing" && !deepDiveReport && (
               <StreamingReport phase={phase} text={streamingText} />
             )}
-            {phase === "awaiting_approval" && report && (
-              <ReportView
-                title="Deep Dive report"
-                report={report}
-                footer={
-                  declined ? (
-                    <p className="text-[12.5px] text-[#EDECEC]/50">
-                      Understood — you'll take it from here.
-                    </p>
-                  ) : (
-                    <ApprovalGate onApprove={onApprove} onDecline={onDecline} />
-                  )
-                }
-              />
+
+            {phase === "awaiting_approval" && deepDiveReport && (
+              <div className="max-w-3xl space-y-5">
+                <p className="text-[11.5px] text-[#EDECEC]/50">
+                  Deep Dive report
+                </p>
+                <article className="rounded-md border border-white/[0.08] p-6">
+                  <MarkdownReport content={deepDiveReport} />
+                </article>
+                {declined ? (
+                  <p className="text-[12.5px] text-[#EDECEC]/50">
+                    Understood — you'll take it from here.
+                  </p>
+                ) : (
+                  <ApprovalGate onApprove={onApprove} onDecline={onDecline} />
+                )}
+              </div>
             )}
-            {phase === "done" && report && (
-              <ReportView
-                title="Solver result"
-                report={report}
-                footer={<StartOverRow onStartOver={onStartOver} />}
-              />
+
+            {phase === "implementing" && (
+              <div className="max-w-3xl space-y-5">
+                {deepDiveReport && <DeepDiveRecap report={deepDiveReport} />}
+                <StreamingReport phase={phase} text={streamingText} />
+              </div>
+            )}
+
+            {phase === "done" && solverReport && (
+              <div className="max-w-3xl space-y-5">
+                {deepDiveReport && <DeepDiveRecap report={deepDiveReport} />}
+                <SolverTabs parsed={parseSolverReport(solverReport)} />
+                <StartOverRow onStartOver={onStartOver} />
+              </div>
             )}
           </div>
         </section>
       </div>
+    </div>
+  );
+}
+
+/** Collapsed recap of the Deep Dive report, shown above the solver phase so
+ * the two phases read as one continuous run instead of two disconnected screens. */
+function DeepDiveRecap({ report }: { report: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="overflow-hidden rounded-md border border-white/[0.08]">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between px-4 py-2.5 text-left hover:bg-white/[0.03]"
+      >
+        <span className="flex items-center gap-2 text-[12.5px] text-[#EDECEC]/70">
+          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500/15 text-[10px] text-emerald-400">
+            ✓
+          </span>
+          Deep Dive investigation
+        </span>
+        <svg
+          width="11"
+          height="11"
+          viewBox="0 0 12 12"
+          fill="none"
+          className={`text-[#EDECEC]/50 transition-transform ${open ? "rotate-180" : ""}`}
+        >
+          <path d="M2.5 4.5 6 8l3.5-3.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <div className="border-t border-white/[0.08] p-5">
+          <MarkdownReport content={report} />
+        </div>
+      )}
     </div>
   );
 }
@@ -184,28 +222,20 @@ function StatusBar({
     auth_required: "Waiting for authorization",
     question_required: "Waiting for your answer",
     failed: "Failed",
-    succeeded:
-      phase === "awaiting_approval" ? "Awaiting your approval" : "Complete",
+    succeeded: phase === "awaiting_approval" ? "Awaiting your approval" : "Complete",
     cancelled: "Cancelled",
   };
   return (
     <div className="flex items-center justify-between border-b border-white/[0.08] px-5 py-2.5">
       <div className="flex items-center gap-2.5">
-        <p className="text-[12.5px] text-[#EDECEC]/75">
-          Issue resolution agent
-        </p>
+        <p className="text-[12.5px] text-[#EDECEC]/75">Issue resolution agent</p>
         {issueUrl && (
-          <span
-            className="max-w-[240px] truncate text-[11.5px] text-[#EDECEC]/40"
-            style={{ fontFamily: MONO }}
-          >
+          <span className="max-w-[240px] truncate text-[11.5px] text-[#EDECEC]/40" style={{ fontFamily: MONO }}>
             {issueUrl}
           </span>
         )}
         <span className="flex items-center gap-1.5 text-[11.5px] text-[#EDECEC]/50">
-          <span
-            className={`h-1.5 w-1.5 rounded-full ${phase === "done" ? "bg-[#D39237]" : "bg-[#D39237]/70"}`}
-          />
+          <span className={`h-1.5 w-1.5 rounded-full ${phase === "done" ? "bg-[#D39237]" : "bg-[#D39237]/70"}`} />
           {label[status]}
         </span>
         {solverStatus && (
@@ -223,9 +253,7 @@ function StatusBar({
         )}
       </div>
       <div className="flex items-center gap-3">
-        {cached && (
-          <span className="text-[11px] text-[#EDECEC]/40">Cached</span>
-        )}
+        {cached && <span className="text-[11px] text-[#EDECEC]/40">Cached</span>}
         {phase !== "idle" && (
           <button
             onClick={onStartOver}
@@ -248,36 +276,21 @@ function StartOverRow({ onStartOver }: { onStartOver: () => void }) {
       >
         Resolve another issue
         <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
-          <path
-            d="M2 6h8M6.5 2.5 10 6l-3.5 3.5"
-            stroke="#14120B"
-            strokeWidth="1.3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
+          <path d="M2 6h8M6.5 2.5 10 6l-3.5 3.5" stroke="#14120B" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
     </div>
   );
 }
 
-function IdleHero({
-  issueUrl,
-  onStart,
-}: {
-  issueUrl: string | null;
-  onStart: () => void;
-}) {
+function IdleHero({ issueUrl, onStart }: { issueUrl: string | null; onStart: () => void }) {
   return (
     <div className="flex min-h-[calc(100vh-200px)] max-w-2xl flex-col items-start justify-center">
       <p className="text-[11.5px] text-[#EDECEC]/50">Step 4 · Resolve</p>
-      <h1 className="mt-3 text-[26px] font-medium leading-snug text-[#EDECEC]">
-        Investigate this issue
-      </h1>
+      <h1 className="mt-3 text-[26px] font-medium leading-snug text-[#EDECEC]">Investigate this issue</h1>
       <p className="mt-3 max-w-md text-[13.5px] leading-relaxed text-[#EDECEC]/60">
-        The agent will clone the repo into a sandbox, trace the real execution
-        path, and hand you a Deep Dive report. It will not touch the repository
-        until you approve implementation.
+        The agent will clone the repo into a sandbox, trace the real execution path, and hand you a Deep Dive
+        report. It will not touch the repository until you approve implementation.
       </p>
       <button
         onClick={onStart}
@@ -290,22 +303,12 @@ function IdleHero({
   );
 }
 
-function StreamingReport({
-  phase,
-  text,
-}: {
-  phase: IssueResolutionPhase;
-  text: string;
-}) {
+function StreamingReport({ phase, text }: { phase: IssueResolutionPhase; text: string }) {
   return (
     <div className="max-w-3xl">
-      <p className="text-[11.5px] text-[#EDECEC]/50">
-        {phase === "implementing" ? "Implementing" : "Investigating"}
-      </p>
+      <p className="text-[11.5px] text-[#EDECEC]/50">{phase === "implementing" ? "Implementing" : "Investigating"}</p>
       <h2 className="mt-2.5 text-[20px] font-medium text-[#EDECEC]/95">
-        {phase === "implementing"
-          ? "Writing and verifying the fix"
-          : "Tracing the execution path in the sandbox"}
+        {phase === "implementing" ? "Writing and verifying the fix" : "Tracing the execution path in the sandbox"}
       </h2>
       <div
         className="mt-6 whitespace-pre-wrap rounded-md border border-white/[0.08] p-5 text-[13px] leading-relaxed text-[#EDECEC]/70"
@@ -317,33 +320,7 @@ function StreamingReport({
   );
 }
 
-function ReportView({
-  title,
-  report,
-  footer,
-}: {
-  title: string;
-  report: string;
-  footer?: React.ReactNode;
-}) {
-  return (
-    <div className="max-w-3xl space-y-5">
-      <p className="text-[11.5px] text-[#EDECEC]/50">{title}</p>
-      <article className="whitespace-pre-wrap rounded-md border border-white/[0.08] p-6 text-[13.5px] leading-relaxed text-[#EDECEC]/85">
-        {report}
-      </article>
-      {footer}
-    </div>
-  );
-}
-
-function ApprovalGate({
-  onApprove,
-  onDecline,
-}: {
-  onApprove: () => void;
-  onDecline: () => void;
-}) {
+function ApprovalGate({ onApprove, onDecline }: { onApprove: () => void; onDecline: () => void }) {
   return (
     <div className="rounded-md border border-[#D39237]/30 bg-[#D39237]/[0.04] p-4">
       <p className="text-[13px] font-medium text-[#EDECEC]/95">
@@ -367,18 +344,10 @@ function ApprovalGate({
   );
 }
 
-function QuestionCard({
-  question,
-  onAnswer,
-}: {
-  question: PendingQuestion;
-  onAnswer: (answer: string) => void;
-}) {
+function QuestionCard({ question, onAnswer }: { question: PendingQuestion; onAnswer: (answer: string) => void }) {
   return (
     <div className="mt-5 rounded-md border border-[#D39237]/30 bg-[#D39237]/[0.04] p-4">
-      <p className="text-[13px] font-medium text-[#EDECEC]/95">
-        {question.question}
-      </p>
+      <p className="text-[13px] font-medium text-[#EDECEC]/95">{question.question}</p>
       <div className="mt-3 flex flex-wrap gap-1.5">
         {question.options.map((opt) => (
           <button
@@ -394,18 +363,10 @@ function QuestionCard({
   );
 }
 
-function AuthCard({
-  authUrls,
-  onResume,
-}: {
-  authUrls: AuthUrl[];
-  onResume: () => void;
-}) {
+function AuthCard({ authUrls, onResume }: { authUrls: AuthUrl[]; onResume: () => void }) {
   return (
     <div className="mt-5 rounded-md border border-white/[0.08] p-4">
-      <p className="text-[13px] font-medium text-[#EDECEC]/95">
-        Connect GitHub to continue
-      </p>
+      <p className="text-[13px] font-medium text-[#EDECEC]/95">Connect GitHub to continue</p>
       <div className="mt-3 flex flex-wrap gap-2">
         {authUrls.map((a) => (
           <a
@@ -429,21 +390,11 @@ function AuthCard({
   );
 }
 
-function FailedCard({
-  error,
-  onRetry,
-}: {
-  error: string | null;
-  onRetry: () => void;
-}) {
+function FailedCard({ error, onRetry }: { error: string | null; onRetry: () => void }) {
   return (
     <div className="mt-5 rounded-md border border-white/[0.08] p-4">
-      <p className="text-[13px] font-medium text-[#EDECEC]/95">
-        The agent couldn't finish this run
-      </p>
-      <p className="mt-1 text-[12px] leading-relaxed text-[#EDECEC]/50">
-        {error ?? "Something went wrong."}
-      </p>
+      <p className="text-[13px] font-medium text-[#EDECEC]/95">The agent couldn't finish this run</p>
+      <p className="mt-1 text-[12px] leading-relaxed text-[#EDECEC]/50">{error ?? "Something went wrong."}</p>
       <button
         onClick={onRetry}
         className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-[#D39237] px-3 py-1.5 text-[12px] font-semibold text-[#14120B] hover:bg-[#D39237]/90"
