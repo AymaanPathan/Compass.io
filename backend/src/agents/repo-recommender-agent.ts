@@ -11,10 +11,7 @@ async function createAgent() {
 
       manifest: {
         model: {
-          name: "nemotron/nvidia-nemotron-3-super-120b-a-12b",
-          params: {
-            max_tokens: 4000,
-          },
+          name: "nvidia-model/openai-gpt-oss-120b",
         },
 
         instructions: `
