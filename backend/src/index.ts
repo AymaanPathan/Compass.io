@@ -9,6 +9,8 @@ import githubRoutes from "./routes/github";
 import ossRoutes from "./routes/findRepo";
 import issuesRoutes from "./routes/issues";
 import issueFinderRoutes from "./routes/issueFinder.route"; 
+import issueResolutionRoutes from "./routes/issueResolution.route";
+
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -41,6 +43,7 @@ app.use("/api/oss", ossRoutes);
 app.use("/api/kanban", repoKanbanRoutes);
 app.use("/api/issues", issuesRoutes);
 app.use("/api/issue-finder", issueFinderRoutes); 
+app.use("/api/issue-resolution", issueResolutionRoutes);
 
 app.get("/", (_req: Request, res: Response) => {
   res.json({

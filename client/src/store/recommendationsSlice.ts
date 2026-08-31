@@ -28,7 +28,15 @@ export interface MatchedRepository {
   whyItMatches: string;
 }
 
+export interface RepoContributionIntent {
+  projectCategory: string;
+  projectSize: string;
+  whatMattersMost: string;
+  goal: string;
+}
+
 interface RecommendationsPayload {
+  contributionIntent: RepoContributionIntent;
   matchedRepositories: MatchedRepository[];
 }
 
@@ -39,16 +47,24 @@ export type AgentRunStatus =
   | "auth_required"
   | "question_required"
   | "succeeded"
-  | "failed";
+  | "failed"
+  | "cancelled";
+
+interface QaEntry {
+  question: string;
+  answer: string;
+}
 
 interface RecommendationsState {
   data: MatchedRepository[] | null;
+  contributionIntent: RepoContributionIntent | null;
   streamingData: Partial<RecommendationsPayload> | null;
   steps: StepNode[];
   status: AgentRunStatus;
   error: string | null;
   authUrls: AuthUrl[];
   pendingQuestion: PendingQuestion | null;
+  qaHistory: QaEntry[];
   generatedAt: string | null;
   cached: boolean;
   rawBuffer: string;
@@ -56,12 +72,14 @@ interface RecommendationsState {
 
 const initialState: RecommendationsState = {
   data: null,
+  contributionIntent: null,
   streamingData: null,
   steps: [],
   status: "idle",
   error: null,
   authUrls: [],
   pendingQuestion: null,
+  qaHistory: [],
   generatedAt: null,
   cached: false,
   rawBuffer: "",
@@ -70,33 +88,41 @@ const initialState: RecommendationsState = {
 async function runStream(
   url: string,
   dispatch: (action: any) => void,
+  body?: unknown,
 ): Promise<
   | { payload: RecommendationsPayload; raw: string }
   | { authUrls: AuthUrl[] }
+  | { question: PendingQuestion }
   | { error: string }
 > {
-  const result = await consumeAgentStream<RecommendationsPayload>(url, {
-    onPhase: () =>
-      dispatch(recommendationsSlice.actions.phaseChanged("running")),
-    onEvent: (event: StepEvent) => {
-      if (event.type === "text_delta") {
-        dispatch(recommendationsSlice.actions.textDeltaReceived(event.delta));
-      } else {
-        dispatch(recommendationsSlice.actions.stepEventReceived(event));
-      }
+  const result = await consumeAgentStream<RecommendationsPayload>(
+    url,
+    {
+      onPhase: () =>
+        dispatch(recommendationsSlice.actions.phaseChanged("running")),
+      onEvent: (event: StepEvent) => {
+        if (event.type === "text_delta") {
+          dispatch(
+            recommendationsSlice.actions.textDeltaReceived(event.delta),
+          );
+        } else {
+          dispatch(recommendationsSlice.actions.stepEventReceived(event));
+        }
+      },
+      onAuthRequired: (authUrls) =>
+        dispatch(recommendationsSlice.actions.authRequired(authUrls)),
+      onQuestionRequired: (question) =>
+        dispatch(recommendationsSlice.actions.questionRequired(question)),
     },
-    onAuthRequired: (authUrls) =>
-      dispatch(recommendationsSlice.actions.authRequired(authUrls)),
-  });
+    body,
+  );
 
   if (result.kind === "error") return { error: result.message };
   if (result.kind === "auth_required") return { authUrls: result.authUrls };
-  if (result.kind === "question_required") {
-    // The repo recommender flow doesn't handle mid-run questions today —
-    // surface it as a failure rather than silently hanging, so the UI's
-    // FailedCard/retry path picks it up.
-    return { error: "The agent asked a question this flow can't answer yet." };
-  }
+  if (result.kind === "question_required")
+    return { question: result.question };
+  if (result.kind === "cancelled")
+    return { error: "The run was cancelled before it finished." };
   return { payload: result.data, raw: result.raw };
 }
 
@@ -118,6 +144,7 @@ async function commitRecommendations(payload: {
 export const runRecommendationsStream = createAsyncThunk<
   | { payload: RecommendationsPayload; raw: string; generatedAt: string }
   | { authUrls: AuthUrl[] }
+  | { question: PendingQuestion }
   | null,
   void,
   { rejectValue: string }
@@ -126,11 +153,39 @@ export const runRecommendationsStream = createAsyncThunk<
 
   const result = await runStream(`${API_BASE}/stream`, dispatch);
   if ("error" in result) return rejectWithValue(result.error);
-  if ("authUrls" in result) return result;
+  if ("authUrls" in result || "question" in result) return result;
 
   await commitRecommendations(result);
   return { ...result, generatedAt: new Date().toISOString() };
 });
+
+export const answerRecommendationsQuestion = createAsyncThunk<
+  | { payload: RecommendationsPayload; raw: string; generatedAt: string }
+  | { authUrls: AuthUrl[] }
+  | { question: PendingQuestion }
+  | null,
+  string,
+  { state: RootState; rejectValue: string }
+>(
+  "recommendations/answer",
+  async (answer, { dispatch, getState, rejectWithValue }) => {
+    const pending = getState().repos.pendingQuestion;
+    if (!pending) return rejectWithValue("No pending question to answer");
+
+    dispatch(recommendationsSlice.actions.answerSubmitted({ answer }));
+
+    const result = await runStream(`${API_BASE}/stream/answer`, dispatch, {
+      toolCallId: pending.toolCallId,
+      threadId: pending.threadId,
+      answer,
+    });
+    if ("error" in result) return rejectWithValue(result.error);
+    if ("authUrls" in result || "question" in result) return result;
+
+    await commitRecommendations(result);
+    return { ...result, generatedAt: new Date().toISOString() };
+  },
+);
 
 export const resumeRecommendationsStream = createAsyncThunk<
   { payload: RecommendationsPayload; raw: string; generatedAt: string } | null,
@@ -139,7 +194,7 @@ export const resumeRecommendationsStream = createAsyncThunk<
 >("recommendations/resumeStream", async (_, { dispatch, rejectWithValue }) => {
   const result = await runStream(`${API_BASE}/stream/resume`, dispatch);
   if ("error" in result) return rejectWithValue(result.error);
-  if ("authUrls" in result)
+  if ("authUrls" in result || "question" in result)
     return rejectWithValue("Still waiting on GitHub authorization");
 
   await commitRecommendations(result);
@@ -163,6 +218,19 @@ export const fetchCachedRecommendations = createAsyncThunk(
     }>;
   },
 );
+
+function applyFinalPayload(
+  state: RecommendationsState,
+  payload: RecommendationsPayload,
+  generatedAt: string,
+) {
+  state.status = "succeeded";
+  state.data = payload.matchedRepositories;
+  state.contributionIntent = payload.contributionIntent ?? null;
+  state.generatedAt = generatedAt;
+  state.cached = false;
+  state.pendingQuestion = null;
+}
 
 const recommendationsSlice = createSlice({
   name: "recommendations",
@@ -197,6 +265,21 @@ const recommendationsSlice = createSlice({
     authRequired(state, action: PayloadAction<AuthUrl[]>) {
       state.status = "auth_required";
       state.authUrls = action.payload;
+      state.pendingQuestion = null;
+    },
+    questionRequired(state, action: PayloadAction<PendingQuestion>) {
+      state.status = "question_required";
+      state.pendingQuestion = action.payload;
+    },
+    answerSubmitted(state, action: PayloadAction<{ answer: string }>) {
+      if (state.pendingQuestion) {
+        state.qaHistory.push({
+          question: state.pendingQuestion.question,
+          answer: action.payload.answer,
+        });
+      }
+      state.pendingQuestion = null;
+      state.status = "running";
     },
     streamReset(state) {
       state.steps = [];
@@ -205,6 +288,9 @@ const recommendationsSlice = createSlice({
       state.error = null;
       state.authUrls = [];
       state.pendingQuestion = null;
+      state.qaHistory = [];
+      state.data = null;
+      state.contributionIntent = null;
     },
   },
   extraReducers: (builder) => {
@@ -214,10 +300,11 @@ const recommendationsSlice = createSlice({
       })
       .addCase(runRecommendationsStream.fulfilled, (state, action) => {
         if (action.payload && "payload" in action.payload) {
-          state.status = "succeeded";
-          state.data = action.payload.payload.matchedRepositories;
-          state.generatedAt = action.payload.generatedAt;
-          state.cached = false;
+          applyFinalPayload(
+            state,
+            action.payload.payload,
+            action.payload.generatedAt,
+          );
         }
       })
       .addCase(runRecommendationsStream.rejected, (state, action) => {
@@ -227,15 +314,35 @@ const recommendationsSlice = createSlice({
           action.error.message ??
           "Failed to match repositories.";
       })
+      .addCase(answerRecommendationsQuestion.pending, (state) => {
+        state.status = "running";
+      })
+      .addCase(answerRecommendationsQuestion.fulfilled, (state, action) => {
+        if (action.payload && "payload" in action.payload) {
+          applyFinalPayload(
+            state,
+            action.payload.payload,
+            action.payload.generatedAt,
+          );
+        }
+      })
+      .addCase(answerRecommendationsQuestion.rejected, (state, action) => {
+        state.status = "failed";
+        state.error =
+          action.payload ??
+          action.error.message ??
+          "Failed to submit your answer.";
+      })
       .addCase(resumeRecommendationsStream.pending, (state) => {
         state.status = "running";
       })
       .addCase(resumeRecommendationsStream.fulfilled, (state, action) => {
         if (action.payload) {
-          state.status = "succeeded";
-          state.data = action.payload.payload.matchedRepositories;
-          state.generatedAt = action.payload.generatedAt;
-          state.cached = false;
+          applyFinalPayload(
+            state,
+            action.payload.payload,
+            action.payload.generatedAt,
+          );
         }
       })
       .addCase(resumeRecommendationsStream.rejected, (state, action) => {

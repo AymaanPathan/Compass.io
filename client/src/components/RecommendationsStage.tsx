@@ -5,7 +5,7 @@ import type {
   MatchedRepository,
   AgentRunStatus,
 } from "../store/recommendationsSlice";
-import type { AuthUrl, StepNode } from "../utils/agentStream";
+import type { AuthUrl, PendingQuestion, StepNode } from "../utils/agentStream";
 import type { AppDispatch } from "../store/store";
 import {
   addToKanban,
@@ -23,16 +23,13 @@ interface RecommendationsStageProps {
   repos: MatchedRepository[] | null;
   steps: StepNode[];
   authUrls: AuthUrl[];
+  pendingQuestion: PendingQuestion | null;
+  qaHistory: { question: string; answer: string }[];
   error: string | null;
   cached: boolean;
   onStart: () => void;
+  onAnswer: (answer: string) => void;
   onResume: () => void;
-  /**
-   * Called when the user picks a repo to find issues in. The parent page
-   * (Sessions.tsx) owns what happens next — flipping a local step, not a
-   * route change — so this component stays agnostic of routing/Redux for
-   * that action.
-   */
   onFindIssues: (repo: MatchedRepository) => void;
 }
 
@@ -41,9 +38,12 @@ export default function RecommendationsStage({
   repos,
   steps,
   authUrls,
+  pendingQuestion,
+  qaHistory,
   error,
   cached,
   onStart,
+  onAnswer,
   onResume,
   onFindIssues,
 }: RecommendationsStageProps) {
@@ -55,9 +55,8 @@ export default function RecommendationsStage({
       top: traceRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [steps]);
+  }, [steps, pendingQuestion]);
 
-  // Needed so RepoCard can tell if a repo is already on the board.
   useEffect(() => {
     dispatch(fetchKanbanItems());
   }, [dispatch]);
@@ -76,7 +75,6 @@ export default function RecommendationsStage({
       <StatusBar status={status} cached={cached} />
 
       <div className="flex min-h-0 flex-1">
-        {/* Left — reasoning */}
         <section className="flex w-full max-w-[380px] shrink-0 flex-col border-r border-white/[0.08]">
           <div className="border-b border-white/[0.08] px-4 py-3">
             <p
@@ -89,12 +87,16 @@ export default function RecommendationsStage({
           <div ref={traceRef} className="flex-1 overflow-y-auto px-4 py-4">
             {isIdle && (
               <p className="text-[13px] leading-relaxed text-[#EDECEC]/45">
-                Run the agent to see it search GitHub for repos that fit your
-                profile.
+                Run the agent to answer a few quick questions, then see it
+                search GitHub for repos that fit.
               </p>
             )}
 
-            {!isIdle && steps.length === 0 && (
+            {!isIdle && qaHistory.length > 0 && (
+              <QaHistoryList entries={qaHistory} />
+            )}
+
+            {!isIdle && steps.length === 0 && qaHistory.length === 0 && (
               <div className="flex flex-col gap-2.5">
                 <div className="h-2.5 w-2/3 rounded bg-white/[0.06]" />
                 <div className="h-2.5 w-1/3 rounded bg-white/[0.06]" />
@@ -103,17 +105,18 @@ export default function RecommendationsStage({
 
             {steps.length > 0 && <StepTrace steps={steps} />}
 
+            {status === "question_required" && pendingQuestion && (
+              <QuestionCard question={pendingQuestion} onAnswer={onAnswer} />
+            )}
             {status === "auth_required" && (
               <AuthCard authUrls={authUrls} onResume={onResume} />
             )}
-            {status === "question_required" && <QuestionPendingCard />}
             {status === "failed" && (
               <FailedCard error={error} onRetry={onStart} />
             )}
           </div>
         </section>
 
-        {/* Right — matched repos */}
         <section className="relative flex min-w-0 flex-1 flex-col overflow-y-auto">
           <div className="w-full flex-1 px-10 py-8 sm:px-14">
             {isIdle && <IdleHero onStart={onStart} />}
@@ -146,9 +149,13 @@ function StatusBar({
     connecting: { label: "Connecting", live: true },
     running: { label: "Running", live: true },
     auth_required: { label: "Waiting for authorization", live: true },
-    question_required: { label: "Waiting for your input", live: true },
+    question_required: { label: "Waiting for your answer", live: true },
     failed: { label: "Failed", live: false },
     succeeded: { label: "Complete", live: false },
+    cancelled: {
+      label: "",
+      live: false
+    }
   };
   const s = map[status];
 
@@ -186,9 +193,9 @@ function IdleHero({ onStart }: { onStart: () => void }) {
         Find repos worth contributing to
       </h1>
       <p className="mt-3 max-w-md text-[13.5px] leading-relaxed text-[#EDECEC]/60">
-        The agent searches GitHub using your contribution areas and engineering
-        patterns — not just your language — and only returns repos that
-        currently have an open good-first-issue you can pick up right now.
+        The agent will ask a few quick questions about the kind of project
+        you're looking for, then search GitHub for repos that fit — each
+        with an open good-first-issue you can pick up right now.
       </p>
       <button
         onClick={onStart}
@@ -210,11 +217,16 @@ function IdleHero({ onStart }: { onStart: () => void }) {
 }
 
 function SearchingState({ status }: { status: AgentRunStatus }) {
+  const heading =
+    status === "question_required"
+      ? "Answer the question on the left to continue"
+      : "Matching repositories to your answers";
+
   return (
     <div className="max-w-3xl">
       <p className="text-[11.5px] text-[#EDECEC]/50">Searching</p>
       <h2 className="mt-2.5 text-[20px] font-medium text-[#EDECEC]/95">
-        Matching repositories to your profile
+        {heading}
       </h2>
       <div className="mt-8 space-y-2.5">
         <div className="h-2.5 w-full rounded bg-white/[0.05]" />
@@ -226,11 +238,54 @@ function SearchingState({ status }: { status: AgentRunStatus }) {
           Waiting on GitHub authorization — see the left panel to continue.
         </p>
       )}
-      {status === "question_required" && (
-        <p className="mt-6 text-[12.5px] text-[#EDECEC]/50">
-          The agent has a question — see the left panel to continue.
-        </p>
-      )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Question interaction — same pattern as IssueFinderStage                  */
+/* -------------------------------------------------------------------------- */
+
+function QaHistoryList({
+  entries,
+}: {
+  entries: { question: string; answer: string }[];
+}) {
+  return (
+    <div className="mb-3 space-y-2 border-b border-white/[0.06] pb-3">
+      {entries.map((qa, i) => (
+        <div key={i} className="text-[12px] leading-relaxed">
+          <p className="text-[#EDECEC]/45">{qa.question}</p>
+          <p className="mt-0.5 text-[#EDECEC]/85">{qa.answer}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function QuestionCard({
+  question,
+  onAnswer,
+}: {
+  question: PendingQuestion;
+  onAnswer: (answer: string) => void;
+}) {
+  return (
+    <div className="mt-5 rounded-md border border-[#D39237]/30 bg-[#D39237]/[0.04] p-4">
+      <p className="text-[13px] font-medium text-[#EDECEC]/95">
+        {question.question}
+      </p>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {question.options.map((opt) => (
+          <button
+            key={opt}
+            onClick={() => onAnswer(opt)}
+            className="rounded-full border border-white/[0.14] px-3 py-1.5 text-[12px] text-[#EDECEC]/75 hover:border-white/[0.3]"
+          >
+            {opt}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -273,25 +328,6 @@ function AuthCard({
   );
 }
 
-/**
- * Placeholder shown while the agent is paused on `question_required`.
- * The recommender flow doesn't currently render the question/answer UI
- * (that lives in the issue-finder flow) — this just tells the user
- * something is waiting on them so the panel doesn't look stuck.
- */
-function QuestionPendingCard() {
-  return (
-    <div className="mt-5 rounded-md border border-white/[0.08] p-4">
-      <p className="text-[13px] font-medium text-[#EDECEC]/95">
-        The agent has a question
-      </p>
-      <p className="mt-1 text-[12px] leading-relaxed text-[#EDECEC]/50">
-        Waiting on your answer before it can continue.
-      </p>
-    </div>
-  );
-}
-
 function FailedCard({
   error,
   onRetry,
@@ -318,7 +354,7 @@ function FailedCard({
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Step trace — same recursive renderer used in ProfileStage                */
+/*  Step trace                                                               */
 /* -------------------------------------------------------------------------- */
 
 function StepTrace({ steps }: { steps: StepNode[] }) {
@@ -450,7 +486,7 @@ function safeStringify(value: unknown) {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Results (right pane)                                                     */
+/*  Results (right pane) — unchanged from before                             */
 /* -------------------------------------------------------------------------- */
 
 function RepoResults({
@@ -564,7 +600,7 @@ function RepoCard({
 }
 
 /* -------------------------------------------------------------------------- */
-/*  3-dot menu — "Add to Kanban board" → column picker                       */
+/*  3-dot menu — unchanged from before                                       */
 /* -------------------------------------------------------------------------- */
 
 function RepoCardMenu({ repo }: { repo: MatchedRepository }) {
