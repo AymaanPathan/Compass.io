@@ -9,9 +9,6 @@ export const http = axios.create({
   withCredentials: true,
 });
 
-// ---------------------------------------------------------------------------
-// Auth
-// ---------------------------------------------------------------------------
 
 export function githubLoginUrl() {
   return `${API_URL}/api/auth/github`;
