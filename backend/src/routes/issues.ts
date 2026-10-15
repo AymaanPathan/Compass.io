@@ -1,4 +1,4 @@
-import { Router, Request, Response } from "express";
+import { Router, Request, Response, NextFunction } from "express";
 import { requireAuth } from "../middleware/auth";
 import {
   trueforge,
@@ -7,6 +7,7 @@ import {
   OSS_CODE_EXPLORER_AGENT_NAME,
 } from "../services/agentClient";
 import { withAgentRetry } from "../utils/retryAgentTurn";
+import { ApiError, errorHandler, isRateLimitError } from "../middleware/errorHandler";
 
 const DEBUG_AGENT_EVENTS = process.env.DEBUG_AGENT_EVENTS === "true";
 
@@ -540,26 +541,6 @@ function parseCodeExplorerResponse(text: string): CodeExplorerResult | null {
 }
 
 // ---------------------------------------------------------------------------
-// Error helpers
-// ---------------------------------------------------------------------------
-
-function isRateLimitError(error: any): boolean {
-  const status = error?.response?.status ?? error?.status ?? error?.statusCode;
-
-  if (status === 429) {
-    return true;
-  }
-
-  const message = String(error?.message || error || "").toLowerCase();
-
-  return (
-    message.includes("429") ||
-    message.includes("rate limit") ||
-    message.includes("too many requests")
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Agent execution
 // ---------------------------------------------------------------------------
 
@@ -919,16 +900,29 @@ async function getCodeExplorationForIssue(
 // Routes
 // ---------------------------------------------------------------------------
 
-router.post("/fetch", requireAuth, async (req: Request, res: Response) => {
-  try {
+type AsyncRouteHandler = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => unknown | Promise<unknown>;
+
+const asyncWrapper =
+  (fn: AsyncRouteHandler) =>
+  (req: Request, res: Response, next: NextFunction): void => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
+
+router.post(
+  "/fetch",
+  requireAuth,
+  asyncWrapper(async (req, res) => {
     const repoFullName = parseRepoFullName(req.body?.repoFullName);
 
     if (!repoFullName) {
-      return res.status(400).json({
-        success: false,
-        error:
-          "repoFullName must be a valid GitHub repository in owner/name format",
-      });
+      throw new ApiError(
+        400,
+        "repoFullName must be a valid GitHub repository in owner/name format",
+      );
     }
 
     const result = await getIssuesForRepo(repoFullName);
@@ -938,23 +932,8 @@ router.post("/fetch", requireAuth, async (req: Request, res: Response) => {
       repository: result.repository,
       issues: result.issues,
     });
-  } catch (error: any) {
-    console.error("[issues/fetch] error:", error);
-
-    if (isRateLimitError(error)) {
-      return res.status(429).json({
-        success: false,
-        error:
-          "The issue-discovery agent is rate-limited right now. Please wait about a minute and try again.",
-      });
-    }
-
-    return res.status(502).json({
-      success: false,
-      error: error?.message || "Failed to fetch issues",
-    });
-  }
-});
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // Deep dive
@@ -1063,5 +1042,7 @@ router.post(
     }
   },
 );
+
+router.use(errorHandler);
 
 export default router;
