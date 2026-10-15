@@ -33,7 +33,8 @@ export function isRateLimitError(error: unknown): boolean {
     message?: unknown;
   };
 
-  const status = value.response?.status ?? value.status ?? value.statusCode;
+  const status =
+    value.response?.status ?? value.status ?? value.statusCode;
 
   if (Number(status) === 429) {
     return true;
@@ -60,7 +61,11 @@ export function errorHandler(
   _next: NextFunction,
 ): void {
   const status =
-    err instanceof ApiError ? err.status : isRateLimitError(err) ? 429 : 502;
+    err instanceof ApiError
+      ? err.status
+      : isRateLimitError(err)
+        ? 429
+        : 502;
 
   const message =
     err instanceof Error && err.message.trim()

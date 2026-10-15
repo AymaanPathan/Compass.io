@@ -7,7 +7,11 @@ import {
   OSS_CODE_EXPLORER_AGENT_NAME,
 } from "../services/agentClient";
 import { withAgentRetry } from "../utils/retryAgentTurn";
-import { ApiError, errorHandler, isRateLimitError } from "../middleware/errorHandler";
+import {
+  ApiError,
+  errorHandler,
+  isRateLimitError,
+} from "../middleware/errorHandler";
 
 const DEBUG_AGENT_EVENTS = process.env.DEBUG_AGENT_EVENTS === "true";
 
