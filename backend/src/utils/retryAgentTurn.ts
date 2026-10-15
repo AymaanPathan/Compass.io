@@ -1,6 +1,8 @@
+import { apiLimiter } from "./rateLimiter";
+
 const DEFAULT_MAX_ATTEMPTS = 10;
 
-const DEFAULT_DELAY_MS = 60_000; 
+const DEFAULT_DELAY_MS = 60_000; // exactly 1 minute
 
 const DEFAULT_MAX_RATE_LIMIT_ATTEMPTS = 10;
 const DEFAULT_RATE_LIMIT_DELAY_MS = 60_000; // exactly 1 minute
@@ -18,7 +20,6 @@ interface WaitInfo {
 interface RetryOptions {
   maxAttempts?: number;
   delayMs?: number;
-
   maxRateLimitAttempts?: number;
   rateLimitDelayMs?: number;
 
@@ -36,7 +37,6 @@ function classifyError(error: any): ErrorKind {
   if (status === 429) {
     return "rate_limited";
   }
-
   if (status === 408 || status === 502 || status === 503 || status === 504) {
     return "retryable";
   }
@@ -54,7 +54,6 @@ function classifyError(error: any): ErrorKind {
   ) {
     return "rate_limited";
   }
-
   if (
     message.includes("agent turn cancelled") ||
     message.includes("abandoned")
@@ -103,27 +102,21 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * Execute an agent turn with bounded retries.
+ * Execute an agent turn with bounded retries and proactive request throttling.
  *
+ * Every attempt acquires a token before the outgoing API operation is invoked.
  * Retry behavior:
- *
- * - Maximum 10 total attempts.
- * - Rate-limit retries wait exactly 1 minute.
- * - Cancelled retries wait exactly 1 minute.
- * - Generic transient retries wait exactly 1 minute.
- * - No exponential backoff.
- * - No jitter.
+ * - Maximum 10 total attempts by default.
+ * - Rate-limit retries respect Retry-After, or wait one minute by default.
+ * - Cancelled retries wait one minute by default.
+ * - Generic transient retries wait one minute by default.
  * - Fatal errors are never retried.
- *
- * A provider Retry-After header is respected for 429 responses.
- * If no Retry-After header exists, the retry waits exactly 1 minute.
  */
 export async function withAgentRetry<T>(
   fn: () => Promise<T>,
   options?: RetryOptions,
 ): Promise<T> {
   const maxAttempts = options?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-
   const delayMs = options?.delayMs ?? DEFAULT_DELAY_MS;
 
   const maxRateLimitAttempts =
@@ -137,58 +130,37 @@ export async function withAgentRetry<T>(
 
   const cancelledDelayMs =
     options?.cancelledDelayMs ?? DEFAULT_CANCELLED_DELAY_MS;
-
   let rateLimitAttempt = 0;
   let cancelledAttempt = 0;
   let retryableAttempt = 0;
 
   let lastError: unknown;
 
-  /*
-   * GLOBAL attempt budget.
-   *
-   * Maximum of 10 agent turns total.
-   *
-   * This prevents:
-   *
-   * 10 generic + 10 rate-limit + 10 cancelled
-   *
-   * from producing 30 turns.
-   */
+  // Global attempt budget prevents category-specific retries from multiplying
+  // the total number of outgoing agent turns.
   const maxTotalAttempts = maxAttempts;
 
   for (let totalAttempt = 1; totalAttempt <= maxTotalAttempts; totalAttempt++) {
     try {
+      // Proactive throttling: wait for a token before making every API attempt.
+      await apiLimiter.acquire();
       return await fn();
     } catch (error) {
       lastError = error;
-
       const kind = classifyError(error);
 
       console.warn(
         `[withAgentRetry] attempt ${totalAttempt}/${maxTotalAttempts} failed: ${kind}`,
       );
 
-      /*
-       * Fatal errors are never retried.
-       */
       if (kind === "fatal") {
         throw error;
       }
 
-      /*
-       * Global attempt limit reached.
-       */
       if (totalAttempt >= maxTotalAttempts) {
         throw error;
       }
 
-      /*
-       * RATE LIMIT
-       *
-       * Wait exactly 1 minute unless Cerebras explicitly
-       * provides a Retry-After header.
-       */
       if (kind === "rate_limited") {
         rateLimitAttempt++;
 
@@ -197,7 +169,6 @@ export async function withAgentRetry<T>(
         }
 
         const waitMs = getRetryAfterMs(error) ?? rateLimitDelayMs;
-
         options?.onWait?.({
           kind: "rate_limited",
           attempt: rateLimitAttempt,
@@ -215,11 +186,6 @@ export async function withAgentRetry<T>(
         continue;
       }
 
-      /*
-       * CANCELLED / ABANDONED
-       *
-       * Always wait exactly 1 minute.
-       */
       if (kind === "cancelled") {
         cancelledAttempt++;
 
@@ -228,14 +194,12 @@ export async function withAgentRetry<T>(
         }
 
         const waitMs = cancelledDelayMs;
-
         options?.onWait?.({
           kind: "cancelled",
           attempt: cancelledAttempt,
           maxAttempts: maxCancelledAttempts,
           waitMs,
         });
-
         console.warn(
           `[withAgentRetry] cancelled ` +
             `(${cancelledAttempt}/${maxCancelledAttempts}), ` +
@@ -246,11 +210,6 @@ export async function withAgentRetry<T>(
         continue;
       }
 
-      /*
-       * GENERIC TRANSIENT FAILURE
-       *
-       * Always wait exactly 1 minute.
-       */
       retryableAttempt++;
 
       if (retryableAttempt > maxAttempts) {
@@ -258,7 +217,6 @@ export async function withAgentRetry<T>(
       }
 
       const waitMs = delayMs;
-
       options?.onWait?.({
         kind: "retryable",
         attempt: retryableAttempt,
