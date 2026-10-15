@@ -1,9 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
 
-/**
- * An application error with an explicit HTTP status code.
- * Use this for expected request/validation errors that should not become 502s.
- */
 export class ApiError extends Error {
   readonly status: number;
 
