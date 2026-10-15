@@ -41,6 +41,9 @@ export class RateLimiter {
 
     if (this.tokens >= 1 && this.waiters.length === 0) {
       this.tokens -= 1;
+      // Start the next refill interval when a token is consumed. This makes
+      // the empty-bucket wait deterministic (e.g. 1000 ms at 1 token/second).
+      this.lastRefillAt = Date.now();
       return Promise.resolve();
     }
 
@@ -77,6 +80,9 @@ export class RateLimiter {
   private drainWaiters(): void {
     while (this.tokens >= 1 && this.waiters.length > 0) {
       this.tokens -= 1;
+      // A waiting caller consumes the newly refilled token, so begin the next
+      // refill interval from this consumption.
+      this.lastRefillAt = Date.now();
       const resolve = this.waiters.shift();
       resolve?.();
     }
