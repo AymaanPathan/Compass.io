@@ -1,6 +1,6 @@
 const DEFAULT_MAX_ATTEMPTS = 10;
 
-const DEFAULT_DELAY_MS = 60_000; // exactly 1 minute
+const DEFAULT_DELAY_MS = 60_000; 
 
 const DEFAULT_MAX_RATE_LIMIT_ATTEMPTS = 10;
 const DEFAULT_RATE_LIMIT_DELAY_MS = 60_000; // exactly 1 minute
