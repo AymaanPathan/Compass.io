@@ -42,6 +42,7 @@ app.use("/api/github", githubRoutes);
 app.use("/api/oss", ossRoutes);
 app.use("/api/kanban", repoKanbanRoutes);
 app.use("/api/issues", issuesRoutes);
+app.use("/issues", issuesRoutes);
 app.use("/api/issue-finder", issueFinderRoutes); 
 app.use("/api/issue-resolution", issueResolutionRoutes);
 
