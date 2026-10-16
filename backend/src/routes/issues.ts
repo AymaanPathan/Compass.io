@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { requireAuth } from "../middleware/auth";
+import rateLimiter from "../middleware/rateLimiter";
 import {
   trueforge,
   OSS_ISSUES_AGENT_NAME,
@@ -919,42 +920,47 @@ async function getCodeExplorationForIssue(
 // Routes
 // ---------------------------------------------------------------------------
 
-router.post("/fetch", requireAuth, async (req: Request, res: Response) => {
-  try {
-    const repoFullName = parseRepoFullName(req.body?.repoFullName);
+router.post(
+  "/fetch",
+  rateLimiter,
+  requireAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const repoFullName = parseRepoFullName(req.body?.repoFullName);
 
-    if (!repoFullName) {
-      return res.status(400).json({
+      if (!repoFullName) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "repoFullName must be a valid GitHub repository in owner/name format",
+        });
+      }
+
+      const result = await getIssuesForRepo(repoFullName);
+
+      return res.json({
+        success: true,
+        repository: result.repository,
+        issues: result.issues,
+      });
+    } catch (error: any) {
+      console.error("[issues/fetch] error:", error);
+
+      if (isRateLimitError(error)) {
+        return res.status(429).json({
+          success: false,
+          error:
+            "The issue-discovery agent is rate-limited right now. Please wait about a minute and try again.",
+        });
+      }
+
+      return res.status(502).json({
         success: false,
-        error:
-          "repoFullName must be a valid GitHub repository in owner/name format",
+        error: error?.message || "Failed to fetch issues",
       });
     }
-
-    const result = await getIssuesForRepo(repoFullName);
-
-    return res.json({
-      success: true,
-      repository: result.repository,
-      issues: result.issues,
-    });
-  } catch (error: any) {
-    console.error("[issues/fetch] error:", error);
-
-    if (isRateLimitError(error)) {
-      return res.status(429).json({
-        success: false,
-        error:
-          "The issue-discovery agent is rate-limited right now. Please wait about a minute and try again.",
-      });
-    }
-
-    return res.status(502).json({
-      success: false,
-      error: error?.message || "Failed to fetch issues",
-    });
-  }
-});
+  },
+);
 
 // ---------------------------------------------------------------------------
 // Deep dive
